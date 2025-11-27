@@ -1,0 +1,120 @@
+# ===================================
+# Python
+# ===================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# ===================================
+# Virtual Environments
+# ===================================
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# ===================================
+# IDEs
+# ===================================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# ===================================
+# Testing
+# ===================================
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+
+# ===================================
+# Type Checking
+# ===================================
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# ===================================
+# Ruff
+# ===================================
+.ruff_cache/
+
+# ===================================
+# Project Specific
+# ===================================
+
+# Logs
+logs/
+*.log
+
+# Data directories
+data/input/*
+!data/input/.gitkeep
+data/output/*
+!data/output/.gitkeep
+data/cache/*
+!data/cache/.gitkeep
+
+# Baseline versions (keep in git for reference)
+!data/baseline/
+!data/baseline/**/*.json
+!data/baseline/**/*.txt
+!data/baseline/README.md
+# But ignore archives
+data/baseline/archive/
+
+# Model files (if downloaded locally)
+models/
+pretrained_models/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Audio files (except test fixtures)
+*.mp3
+*.wav
+*.flac
+*.m4a
+!tests/fixtures/audio/*.mp3
+!tests/fixtures/audio/*.wav
+
+# JSON outputs (except test fixtures)
+data/output/**/*.json
+!tests/fixtures/data/*.json
+
+# API keys and secrets
+.env
+secrets.json
+credentials.json
+
+# uv lock file (optional - some prefer to commit this)
+# uv.lock

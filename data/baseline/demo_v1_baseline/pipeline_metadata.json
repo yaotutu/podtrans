@@ -1,0 +1,23 @@
+{
+  "audio_file": "data/input/demo.mp3",
+  "output_dir": "/Users/yaotutu/Desktop/code/podtrans/data/output/demo",
+  "created_at": "2025-11-27T11:15:35.061128",
+  "updated_at": "2025-11-27T11:27:20.645049",
+  "stages": [
+    {
+      "name": "asr",
+      "status": "success",
+      "start_time": "2025-11-27T11:15:35.061714",
+      "end_time": "2025-11-27T11:27:20.645015",
+      "duration_seconds": 705.583301,
+      "error_message": null,
+      "metadata": {
+        "segments": 248,
+        "speakers": 2,
+        "language": "en"
+      }
+    }
+  ],
+  "total_duration_seconds": 705.583301,
+  "final_status": "success"
+}
