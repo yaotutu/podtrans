@@ -89,6 +89,51 @@ uv run python scripts/convert_to_soulx.py
 
 ### 测试和验证
 
+#### `test_pipeline.py` ⭐
+完整流程测试脚本 - 快速验证 ASR + Translation 优化效果。
+
+**用法**:
+```bash
+# 测试默认文件 (data/input/demo.mp3)
+uv run python scripts/test_pipeline.py
+
+# 测试指定音频
+uv run python scripts/test_pipeline.py --audio data/input/another.mp3
+
+# 批量测试多个文件
+uv run python scripts/test_pipeline.py --batch data/input/*.mp3
+
+# 跳过 baseline 对比
+uv run python scripts/test_pipeline.py --no-compare
+
+# 仅运行 ASR 阶段
+uv run python scripts/test_pipeline.py --asr-only
+
+# 仅运行 Translation 阶段 (需要已有 ASR 结果)
+uv run python scripts/test_pipeline.py --translation-only
+```
+
+**功能**:
+- ✅ 自动运行 ASR → Translation 完整流程
+- ✅ 自动与 baseline 对比质量指标
+- ✅ 生成详细测试报告 (Markdown + JSON)
+- ✅ 支持批量测试多个音频文件
+- ✅ 性能监控 (耗时、速度)
+- ✅ 质量评估 (说话人检测、段落完整性、说话人保留率)
+
+**输出文件**:
+- `data/output/{audio_name}/test_report.md` - Markdown 格式报告
+- `data/output/{audio_name}/test_results.json` - JSON 格式结果
+- `data/output/batch_test_results.json` - 批量测试汇总 (批量模式)
+
+**使用场景**:
+1. **优化后快速验证**: 修改配置后一键测试完整流程
+2. **性能对比**: 对比不同配置下的处理速度
+3. **质量保证**: 确保优化不降低质量
+4. **批量验证**: 测试多个场景确保稳定性
+
+---
+
 #### `test_soulx_format.py`
 快速测试 SoulX 格式转换功能。
 
@@ -107,7 +152,30 @@ uv run python scripts/test_soulx_format.py
 
 ## 🔄 典型工作流
 
-### 优化后评估
+### 快速测试流程 (推荐) ⭐
+
+使用 `test_pipeline.py` 一键完成所有步骤:
+
+```bash
+# 1. 修改配置或代码
+vim .env
+
+# 2. 运行完整测试 (自动运行 ASR + Translation + 对比 + 生成报告)
+uv run python scripts/test_pipeline.py
+
+# 3. 查看测试报告
+cat data/output/demo/test_report.md
+
+# 4. 如果质量提升，更新 baseline
+uv run python scripts/update_baseline.py
+
+# 5. 记录改进点
+vim data/baseline/README.md
+```
+
+### 手动分步执行流程
+
+如果需要更精细的控制:
 
 ```bash
 # 1. 修改配置或代码
@@ -125,6 +193,16 @@ uv run python scripts/update_baseline.py
 
 # 5. 记录改进点
 vim data/baseline/README.md
+```
+
+### 批量测试多个音频
+
+```bash
+# 批量测试所有输入文件
+uv run python scripts/test_pipeline.py --batch data/input/*.mp3
+
+# 查看批量测试汇总
+cat data/output/batch_test_results.json
 ```
 
 ### SoulX TTS 测试
