@@ -89,6 +89,116 @@ uv run python scripts/convert_to_soulx.py
 
 ### 测试和验证
 
+#### `compare_models.py` 🆕⭐
+对比不同翻译模型的性能和成本。
+
+**用法**:
+```bash
+# 对比多个模型
+uv run python scripts/compare_models.py data/output/demo/asr_result.json \\
+  --models qwen-max,qwen-plus,qwen-turbo
+
+# 自定义批次大小
+uv run python scripts/compare_models.py data/output/demo/asr_result.json \\
+  --models qwen-max,qwen-plus \\
+  --batch-size 50
+
+# 禁用缓存进行纯净对比
+uv run python scripts/compare_models.py data/output/demo/asr_result.json \\
+  --models qwen-max,qwen-plus \\
+  --no-cache
+```
+
+**对比维度**:
+- ✅ 翻译质量评分 (0-100 + A-F 等级)
+- ✅ 段落丢失率
+- ✅ 处理速度 (seg/s)
+- ✅ API 成本估算 (¥)
+- ✅ 缓存命中率
+
+**输出示例**:
+```
+Model Comparison
+┏━━━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━━━━━┳━━━━━━━━━━┳━━━━━━━━━━┳━━━━━━━━┳━━━━━━━━━━┳━━━━━━━━━━━┓
+┃ Model         ┃ Status ┃ Loss Rate ┃ Quality  ┃ Time (s) ┃ Speed  ┃ Cost (¥) ┃ Cache Hit ┃
+┡━━━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━━━━━╇━━━━━━━━━━╇━━━━━━━━━━╇━━━━━━━━╇━━━━━━━━━━╇━━━━━━━━━━━┩
+│ qwen-max      │   ✓    │     0.00% │ 95.0 (A+)│   138.88 │  1.79  │   ¥1.340 │     0.0%  │
+│ qwen-plus     │   ✓    │     0.00% │ 92.5 (A) │   115.23 │  2.15  │   ¥0.402 │     0.0%  │
+│ qwen-turbo    │   ✓    │     0.40% │ 88.0 (A) │    98.45 │  2.52  │   ¥0.128 │     0.0%  │
+└───────────────┴────────┴───────────┴──────────┴──────────┴────────┴──────────┴───────────┘
+
+Recommended Model:
+  Model: qwen-max
+  Quality: 95.0/100 (A+)
+  Loss Rate: 0.00%
+  Cost: ¥1.340
+  Speed: 1.79 seg/s
+```
+
+**使用场景**:
+1. **模型选型**: 找到最佳性价比模型
+2. **成本优化**: 对比不同模型的成本差异
+3. **质量评估**: 多模型质量对比
+4. **性能测试**: 速度和稳定性对比
+
+---
+
+#### `test_translation_modes.py` 🆕
+测试和对比不同翻译模式和配置的效果。
+
+**用法**:
+```bash
+# 测试 JSON 模式 (默认)
+uv run python scripts/test_translation_modes.py data/output/demo/asr_result.json
+
+# 测试纯文本模式
+uv run python scripts/test_translation_modes.py data/output/demo/asr_result.json --mode text
+
+# 对比 JSON vs 文本模式
+uv run python scripts/test_translation_modes.py data/output/demo/asr_result.json --compare
+
+# 测试不同批次大小
+uv run python scripts/test_translation_modes.py data/output/demo/asr_result.json --batch-size 30,50,100
+
+# 完整对比测试 (两种模式 × 三种批次大小)
+uv run python scripts/test_translation_modes.py data/output/demo/asr_result.json --compare --batch-size 30,50,100
+```
+
+**功能**:
+- ✅ 测试 JSON 模式 vs 纯文本模式
+- ✅ 测试不同批次大小 (30/50/100)
+- ✅ 计算段落丢失率
+- ✅ 测量处理时间
+- ✅ 生成对比表格
+- ✅ 推荐最佳配置
+
+**输出示例**:
+```
+Translation Mode Comparison
+┌──────┬────────────┬───────┬────────┬──────┬───────────┬──────────┬────────┐
+│ Mode │ Batch Size │ Input │ Output │ Lost │ Loss Rate │ Time (s) │ Status │
+├──────┼────────────┼───────┼────────┼──────┼───────────┼──────────┼────────┤
+│ JSON │ 30         │ 248   │ 248    │ 0    │ 0.00%     │ 145.32   │ ✓      │
+│ JSON │ 50         │ 248   │ 246    │ 2    │ 0.81%     │ 98.45    │ ✓      │
+│ Text │ 30         │ 248   │ 248    │ 0    │ 0.00%     │ 142.18   │ ✓      │
+│ Text │ 50         │ 248   │ 247    │ 1    │ 0.40%     │ 95.67    │ ✓      │
+└──────┴────────────┴───────┴────────┴──────┴───────────┴──────────┴────────┘
+
+Recommended Configuration:
+  Mode: Text
+  Batch Size: 30
+  Loss Rate: 0.00%
+  Time: 142.18s
+```
+
+**使用场景**:
+1. **验证 JSON 模式兼容性**: 测试您的模型是否支持 response_format
+2. **优化批次大小**: 找到速度和稳定性的最佳平衡点
+3. **对比模式性能**: 比较 JSON 和文本模式的丢失率差异
+4. **配置决策**: 基于实际数据选择最佳配置
+
+---
+
 #### `test_pipeline.py` ⭐
 完整流程测试脚本 - 快速验证 ASR + Translation 优化效果。
 
