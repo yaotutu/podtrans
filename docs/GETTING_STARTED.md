@@ -292,36 +292,35 @@ PodTrans 需要两个 API keys 才能正常工作。
 
 ---
 
-### 5.2 获取 DashScope API Key
+### 5.2 配置翻译 API (OpenAI 兼容接口)
 
-**用途**: 调用 Qwen 大模型进行翻译
+**用途**: 调用大模型进行翻译
 
-#### 步骤 1: 注册阿里云账号
+PodTrans 使用 OpenAI 兼容的 API 接口,你可以使用:
+- 阿里云 DashScope (Qwen 模型)
+- OpenAI 官方 API
+- 其他任何 OpenAI 兼容的服务 (DeepSeek, Moonshot 等)
 
-1. 访问 https://www.aliyun.com/
-2. 点击 **"免费注册"**
-3. 填写手机号、验证码
-4. 完成实名认证 (需要身份证)
+#### 推荐选项 1: 阿里云 DashScope (国内用户推荐)
 
-#### 步骤 2: 开通 DashScope 服务
+**优点**: 速度快、价格便宜、中文翻译质量好
 
-1. 访问 https://dashscope.console.aliyun.com/
-2. 首次访问会提示开通服务,点击 **"立即开通"**
-3. 阅读协议并同意
-4. 开通成功
+1. 注册阿里云账号: https://www.aliyun.com/
+2. 开通 DashScope: https://dashscope.console.aliyun.com/
+3. 创建 API Key (格式: `sk-xxxxxxxxxxxx`)
+4. 充值 (可选,有免费额度)
 
-#### 步骤 3: 创建 API Key
+#### 推荐选项 2: OpenAI 官方 API
 
-1. 在 DashScope 控制台,点击 **"API Key 管理"**
-2. 点击 **"创建新的 API Key"**
-3. **复制生成的 API Key** (格式: `sk-xxxxxxxxxxxx`)
+**优点**: 模型质量高
 
-   ⚠️ **重要**: 请妥善保管,不要泄露!
+1. 注册 OpenAI 账号: https://platform.openai.com/
+2. 创建 API Key
+3. 充值 (需要国际信用卡)
 
-#### 步骤 4: 充值 (可选)
+#### 推荐选项 3: 其他 OpenAI 兼容服务
 
-- DashScope 提供免费额度
-- 如果需要处理大量播客,可以充值 (推荐充值 ¥10-20 即可)
+任何提供 OpenAI 兼容接口的服务都可以使用。
 
 ---
 
@@ -348,29 +347,64 @@ notepad .env   # Windows
 
 #### 填入你的 API keys
 
-在 .env 文件中找到以下行,替换为你的真实 API keys:
+在 .env 文件中找到以下行,根据你选择的服务替换:
+
+**方案 A: 使用 DashScope (推荐)**
 
 ```bash
 # ============= 必需配置 =============
-# 替换为你在 HuggingFace 创建的 token
+# HuggingFace Token (用于说话人分离)
 HF_TOKEN=hf_your_actual_token_here
 
-# 替换为你在 DashScope 创建的 API key
-DASHSCOPE_API_KEY=sk_your_actual_key_here
-
-# ============= 可选配置 (通常不需要修改) =============
-# Whisper 模型大小 (medium 是推荐的平衡选择)
-WHISPER_MODEL=medium
-
-# 设备 (macOS 用户必须使用 cpu)
-DEVICE=cpu
-
-# 计算精度 (CPU 使用 int8)
-COMPUTE_TYPE=int8
-
-# 翻译模型
+# Translation API (OpenAI 兼容接口)
+DASHSCOPE_API_KEY=sk_your_dashscope_key_here
+TRANSLATION_API_BASE=https://dashscope.aliyuncs.com/compatible-mode/v1
 TRANSLATION_MODEL=qwen-coder-plus
+
+# ============= ASR 配置 (通常不需要修改) =============
+WHISPER_MODEL=medium
+DEVICE=cpu
+COMPUTE_TYPE=int8
 ```
+
+**方案 B: 使用 OpenAI 官方 API**
+
+```bash
+# HuggingFace Token (用于说话人分离)
+HF_TOKEN=hf_your_actual_token_here
+
+# Translation API (OpenAI 官方)
+DASHSCOPE_API_KEY=sk_your_openai_key_here
+TRANSLATION_API_BASE=https://api.openai.com/v1
+TRANSLATION_MODEL=gpt-4o-mini
+
+# ASR 配置
+WHISPER_MODEL=medium
+DEVICE=cpu
+COMPUTE_TYPE=int8
+```
+
+**方案 C: 使用其他 OpenAI 兼容服务**
+
+```bash
+# HuggingFace Token
+HF_TOKEN=hf_your_actual_token_here
+
+# Translation API (填入你的服务信息)
+DASHSCOPE_API_KEY=your_api_key_here
+TRANSLATION_API_BASE=https://your-service-url/v1
+TRANSLATION_MODEL=your_model_name
+
+# ASR 配置
+WHISPER_MODEL=medium
+DEVICE=cpu
+COMPUTE_TYPE=int8
+```
+
+**配置说明**:
+- `DASHSCOPE_API_KEY`: 你的 API Key (虽然变量名叫 DASHSCOPE,但可以填任何服务的 key)
+- `TRANSLATION_API_BASE`: OpenAI 兼容的 API 基础 URL
+- `TRANSLATION_MODEL`: 模型名称 (根据你使用的服务填写)
 
 **保存文件** (nano 编辑器按 `Ctrl + X`,然后按 `Y`,再按 `Enter`)
 
@@ -1039,10 +1073,17 @@ uv run python scripts/test_pipeline.py          # 完整流程测试
 
 ### Q5: 翻译费用大概多少?
 
-**A**:
+**A**: 取决于你使用的 API 服务:
+
+**DashScope (Qwen)**:
 - 60 分钟播客: 约 ¥0.1-0.5
-- 使用 qwen-turbo 更便宜 (~¥0.1)
-- 使用 qwen-max 更贵 (~¥0.5),但质量更好
+- qwen-turbo: ~¥0.1 (便宜)
+- qwen-max: ~¥0.5 (质量更好)
+
+**OpenAI**:
+- 60 分钟播客: 约 $0.05-0.20
+- gpt-4o-mini: ~$0.05 (便宜)
+- gpt-4o: ~$0.20 (质量更好)
 
 ### Q6: 可以翻译中文到英文吗?
 
