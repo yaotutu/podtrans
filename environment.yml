@@ -55,6 +55,9 @@ dependencies:
     # TTS
     - httpx>=0.27.0
 
+    # Network and proxy support
+    - socksio>=1.0.0
+
     # Audio processing (additional)
     - pydub>=0.25.1
 

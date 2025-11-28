@@ -115,6 +115,10 @@ python -m podtrans.cli transcribe podcast.mp3 --device cuda
 
 # CPU 模式（兼容性更好）
 python -m podtrans.cli transcribe podcast.mp3 --device cpu
+
+# 或者配置环境变量后，无需每次指定设备：
+# 在 .env 中设置 DEVICE=cuda，然后直接运行：
+python -m podtrans.cli transcribe podcast.mp3
 ```
 
 ### 翻译选项
