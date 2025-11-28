@@ -29,11 +29,11 @@ dependencies = [
     "loguru>=0.7.3",
     "rich>=13.9.0",
 
-    # ASR
-    "torch>=2.0.0,<2.5.0",  # Pin to avoid incompatibility
-    "torchaudio>=2.0.0,<2.5.0",  # Pin to avoid incompatibility with pyannote
-    "whisperx>=3.1.0",
-    "pyannote.audio>=3.1.0",
+    # ASR (upgraded to whisperx 3.7.4 official recommendation)
+    "torch>=2.8.0,<2.9.0",  # whisperx 3.7.4 requires torch~=2.8.0
+    "torchaudio>=2.8.0,<2.9.0",  # whisperx 3.7.4 requires torchaudio~=2.8.0
+    "whisperx>=3.7.4",  # Latest stable version with torch 2.8 support
+    "pyannote.audio==3.3.2",  # Locked to 3.3.2 (whisperx requires <4.0.0)
 
     # Translation
     "openai>=1.58.0",

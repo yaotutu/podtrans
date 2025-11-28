@@ -21,6 +21,7 @@ from typing import Any
 
 import torch
 import whisperx
+from whisperx.diarize import DiarizationPipeline  # whisperx 3.7+ API
 from loguru import logger
 from rich.progress import (
     BarColumn,
@@ -436,7 +437,7 @@ class WhisperXHandler:
             # === 加载说话人分离模型 ===
             if self.diarize_model is None:
                 logger.debug("正在加载说话人分离模型（首次加载较慢）")
-                self.diarize_model = whisperx.DiarizationPipeline(
+                self.diarize_model = DiarizationPipeline(
                     use_auth_token=self.hf_token,
                     device=self.device,
                 )
