@@ -216,9 +216,11 @@ podtrans/
 │   │   └── README.md
 │   └── cache/              # 模型缓存
 ├── tests/                  # 测试文件
-├── docs/                   # 文档
-├── CLAUDE.md               # 本文件
-├── BASELINE_SYSTEM.md      # 基准系统文档
+├── docs/                   # 文档目录
+│   ├── SETUP_GUIDE.md      # 新电脑快速启动指南 ⭐
+│   ├── BASELINE_SYSTEM.md  # 基准系统文档
+│   └── CHANGELOG.md        # 变更日志
+├── CLAUDE.md               # 本文件 (开发指引)
 ├── README.md               # 项目说明
 ├── pyproject.toml          # 项目配置
 └── .env.example            # 环境变量模板
@@ -456,7 +458,7 @@ class TTSResult(BaseModel):
 
 ### 核心脚本 (`scripts/`)
 
-详细文档见 `scripts/README.md` 和 `BASELINE_SYSTEM.md`。
+详细文档见 `scripts/README.md` 和 `docs/BASELINE_SYSTEM.md`。
 
 | 脚本 | 功能 | 用法 |
 |------|------|------|
@@ -690,7 +692,9 @@ uv run ruff format .       # 格式化
 ## 🔗 相关文档
 
 - **README.md** - 项目介绍和快速开始
-- **BASELINE_SYSTEM.md** - 基准系统完整文档
+- **docs/SETUP_GUIDE.md** - 新电脑快速启动指南 (10 分钟上手)
+- **docs/BASELINE_SYSTEM.md** - 基准系统完整文档
+- **docs/CHANGELOG.md** - 变更日志
 - **scripts/README.md** - 脚本工具使用指南
 - **src/podtrans/translation/README.md** - 翻译模块详细说明
 - **src/podtrans/translation/KNOWN_ISSUES.md** - 已知问题和解决方案
