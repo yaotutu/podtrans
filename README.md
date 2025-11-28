@@ -2,7 +2,7 @@
 
 > AI 驱动的播客翻译流水线：英文播客 → 中文播客 (保留说话人信息和语音风格)
 
-[![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Code style: ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 
@@ -64,24 +64,28 @@ Chinese Audio (WAV)
 
 ### 前置要求
 
-- **Python 3.12+** (必需)
-- **uv** 包管理器 (必需)
+- **Conda** (必需, 用于环境管理)
+- **Python 3.11+** (必需, 通过 conda 安装)
 - **FFmpeg** (可选但推荐,用于音频处理)
 - **HuggingFace Token** (必需,用于说话人分离)
 - **DashScope API Key** (必需,用于翻译)
+- **CUDA 12.1+** (推荐,用于GPU加速)
 
 ### 10 分钟安装指南
 
 ```bash
-# 1. 安装 uv 包管理器
-curl -LsSf https://astral.sh/uv/install.sh | sh
+# 1. 安装 Miniconda (如果尚未安装)
+curl -O https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh
+bash Miniconda3-latest-Linux-x86_64.sh
+# 或者使用系统包管理器: sudo apt install conda
 
 # 2. 克隆项目
 git clone https://github.com/YOUR_USERNAME/podtrans.git
 cd podtrans
 
-# 3. 安装依赖 (自动创建虚拟环境)
-uv sync
+# 3. 创建并激活 conda 环境
+conda env create -f environment.yml
+conda activate podtrans
 
 # 4. 配置环境变量
 cp .env.example .env
@@ -90,7 +94,7 @@ cp .env.example .env
 #   - DASHSCOPE_API_KEY: 从 https://dashscope.console.aliyun.com/ 获取
 
 # 5. 验证安装
-uv run python -c "from podtrans.asr import WhisperXHandler; print('✅ 安装成功!')"
+python -c "from podtrans.asr import WhisperXHandler; print('✅ 安装成功!')"
 ```
 
 **详细文档**:
@@ -109,15 +113,15 @@ uv run python -c "from podtrans.asr import WhisperXHandler; print('✅ 安装成
 cp your_podcast.mp3 data/input/
 
 # Step 1: ASR - 语音识别 + 说话人分离
-uv run podtrans transcribe data/input/your_podcast.mp3
+python -m podtrans.cli transcribe data/input/your_podcast.mp3
 # 输出: data/output/your_podcast/asr_result.json
 
 # Step 2: Translation - 智能批处理翻译
-uv run podtrans translate data/output/your_podcast/asr_result.json
+python -m podtrans.cli translate data/output/your_podcast/asr_result.json
 # 输出: data/output/your_podcast/translation_result.json
 
 # Step 3: TTS - 多说话人语音合成 (需要外部 SoulX 服务)
-uv run podtrans synthesize data/output/your_podcast/translation_result.json
+python -m podtrans.cli synthesize data/output/your_podcast/translation_result.json
 # 输出: data/output/your_podcast/output.wav
 ```
 
@@ -127,44 +131,44 @@ uv run podtrans synthesize data/output/your_podcast/translation_result.json
 
 ```bash
 # 指定输出目录
-uv run podtrans transcribe podcast.mp3 -o ./my_output
+python -m podtrans.cli transcribe podcast.mp3 -o ./my_output
 
 # 指定语言 (跳过自动检测,加快速度)
-uv run podtrans transcribe podcast.mp3 -l en
+python -m podtrans.cli transcribe podcast.mp3 -l en
 
 # 禁用说话人分离 (仅转录文本)
-uv run podtrans transcribe podcast.mp3 --no-diarization
+python -m podtrans.cli transcribe podcast.mp3 --no-diarization
 
 # 使用更大的 Whisper 模型 (更准确但更慢)
-uv run podtrans transcribe podcast.mp3 -m large-v3
+python -m podtrans.cli transcribe podcast.mp3 -m large-v3
 ```
 
 #### Translation 选项
 
 ```bash
 # 指定源语言和目标语言
-uv run podtrans translate asr_result.json -s en -t zh
+python -m podtrans.cli translate asr_result.json -s en -t zh
 
 # 指定输出目录
-uv run podtrans translate asr_result.json -o ./translations
+python -m podtrans.cli translate asr_result.json -o ./translations
 ```
 
 #### TTS 选项
 
 ```bash
 # 基础用法
-uv run podtrans synthesize translation_result.json
+python -m podtrans.cli synthesize translation_result.json
 
 # 指定输出文件
-uv run podtrans synthesize translation_result.json -o chinese_podcast.wav
+python -m podtrans.cli synthesize translation_result.json -o chinese_podcast.wav
 
 # 提供说话人语音样本 (改进声音质量)
-uv run podtrans synthesize translation_result.json \
+python -m podtrans.cli synthesize translation_result.json \
   --speaker-audio SPEAKER_00=voices/male.wav \
   --speaker-audio SPEAKER_01=voices/female.wav
 
 # 提供说话人描述
-uv run podtrans synthesize translation_result.json \
+python -m podtrans.cli synthesize translation_result.json \
   --speaker-desc SPEAKER_00="中年男性,声音低沉有磁性" \
   --speaker-desc SPEAKER_01="年轻女性,声音清脆活泼"
 ```
@@ -262,19 +266,19 @@ podtrans/
 
 ```bash
 # 所有测试
-uv run pytest
+pytest
 
 # 单元测试 (快速)
-uv run pytest tests/unit/
+pytest tests/unit/
 
 # 集成测试
-uv run pytest tests/integration/
+pytest tests/integration/
 
 # 跳过慢速测试
-uv run pytest -m "not slow"
+pytest -m "not slow"
 
 # 生成覆盖率报告
-uv run pytest --cov=src/podtrans --cov-report=html
+pytest --cov=src/podtrans --cov-report=html
 open htmlcov/index.html
 ```
 
@@ -282,13 +286,13 @@ open htmlcov/index.html
 
 ```bash
 # Linting
-uv run ruff check .
+ruff check .
 
 # 自动修复
-uv run ruff check --fix .
+ruff check --fix .
 
 # 格式化
-uv run ruff format .
+ruff format .
 
 # 类型检查
 uv run mypy src/

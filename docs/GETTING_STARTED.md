@@ -18,7 +18,8 @@
 | **电脑** | macOS / Linux / Windows | ✅ 必需 |
 | **网络** | 稳定网络连接 (需下载 ~2 GB 模型) | ✅ 必需 |
 | **磁盘空间** | 至少 5 GB 可用空间 | ✅ 必需 |
-| **Python** | 3.12 或更高版本 | ✅ 必需 |
+| **Conda** | 环境管理器 (推荐 Miniconda) | ✅ 必需 |
+| **Python** | 3.11 或更高版本 (通过 conda 安装) | ✅ 必需 |
 | **HuggingFace 账号** | 免费注册 | ✅ 必需 |
 | **阿里云账号** | 用于翻译 API | ✅ 必需 |
 
@@ -226,13 +227,13 @@ uv sync
 
 ```bash
 # 测试 Python 环境
-uv run python --version
+conda activate podtrans && python --version
 # 应该显示: Python 3.12.x
 
 # 测试包导入
-uv run python -c "from podtrans.asr import WhisperXHandler; print('✅ ASR 模块正常')"
-uv run python -c "from podtrans.translation import Translator; print('✅ Translation 模块正常')"
-uv run python -c "from podtrans.tts import SoulXClient; print('✅ TTS 模块正常')"
+conda activate podtrans && python -c "from podtrans.asr import WhisperXHandler; print('✅ ASR 模块正常')"
+conda activate podtrans && python -c "from podtrans.translation import Translator; print('✅ Translation 模块正常')"
+conda activate podtrans && python -c "from podtrans.tts import SoulXClient; print('✅ TTS 模块正常')"
 ```
 
 **应该看到**:
@@ -411,7 +412,7 @@ COMPUTE_TYPE=int8
 #### 验证配置
 
 ```bash
-uv run python -c "
+conda activate podtrans && python -c "
 from podtrans.config import get_settings
 s = get_settings()
 print(f'✅ HF_TOKEN: {s.hf_token[:8]}...' if s.hf_token else '❌ 缺少 HF_TOKEN')
@@ -475,7 +476,7 @@ ls data/input/
 **运行一次完整流程 (会自动下载所有模型)**:
 
 ```bash
-uv run podtrans transcribe data/input/test.mp3
+conda activate podtrans && podtrans transcribe data/input/test.mp3
 ```
 
 **首次运行会看到**:
@@ -515,7 +516,7 @@ Downloading speechbrain/spkrec-ecapa-voxceleb...
 
 ```bash
 # 预下载 Whisper 模型
-uv run python scripts/preload_models.py
+conda activate podtrans && python scripts/preload_models.py
 ```
 
 **会看到**:
@@ -541,7 +542,7 @@ Downloading: 100%|██████████| 1.4G/1.4G [05:30<00:00, 4.2MB/
 ### 6.4 检查模型下载状态
 
 ```bash
-uv run python scripts/check_models.py
+conda activate podtrans && python scripts/check_models.py
 ```
 
 **完整下载后会看到**:
@@ -586,7 +587,7 @@ uv run python scripts/check_models.py
 ```bash
 # 临时使用镜像
 export HF_ENDPOINT=https://hf-mirror.com
-uv run podtrans transcribe data/input/test.mp3
+conda activate podtrans && podtrans transcribe data/input/test.mp3
 
 # 永久设置 (添加到 ~/.bashrc 或 ~/.zshrc)
 echo 'export HF_ENDPOINT=https://hf-mirror.com' >> ~/.zshrc
@@ -614,7 +615,7 @@ https://huggingface.co/pyannote/speaker-diarization-3.1/resolve/main/...
 **步骤 1**: 检查 HF_TOKEN 是否设置
 
 ```bash
-uv run python -c "
+conda activate podtrans && python -c "
 from podtrans.config import get_settings
 s = get_settings()
 print(f'HF_TOKEN: {s.hf_token[:8] if s.hf_token else \"未设置\"}')
@@ -635,7 +636,7 @@ print(f'HF_TOKEN: {s.hf_token[:8] if s.hf_token else \"未设置\"}')
 **步骤 3**: 测试 HF_TOKEN 是否有效
 
 ```bash
-uv run python -c "
+conda activate podtrans && python -c "
 from huggingface_hub import HfApi
 api = HfApi()
 try:
@@ -649,7 +650,7 @@ except Exception as e:
 **步骤 4**: 重新运行
 
 ```bash
-uv run podtrans transcribe data/input/test.mp3
+conda activate podtrans && podtrans transcribe data/input/test.mp3
 ```
 
 ---
@@ -692,7 +693,7 @@ nano .env
 WHISPER_MODEL=base  # 只需 150 MB (精度略低)
 
 # 保存后重新运行
-uv run podtrans transcribe data/input/test.mp3
+conda activate podtrans && podtrans transcribe data/input/test.mp3
 ```
 
 **解决方案 C**: 移动缓存到其他磁盘
@@ -722,7 +723,7 @@ OSError: Unable to load weights from checkpoint
 rm -rf ~/.cache/huggingface/hub/
 
 # 重新下载
-uv run podtrans transcribe data/input/test.mp3
+conda activate podtrans && podtrans transcribe data/input/test.mp3
 ```
 
 ---
@@ -749,7 +750,7 @@ export HTTP_PROXY=http://127.0.0.1:7890
 export HTTPS_PROXY=http://127.0.0.1:7890
 
 # 重新运行
-uv run podtrans transcribe data/input/test.mp3
+conda activate podtrans && podtrans transcribe data/input/test.mp3
 ```
 
 ---
@@ -778,7 +779,7 @@ ls -lh data/input/
 ### 7.2 步骤 1: 语音识别 + 说话人分离
 
 ```bash
-uv run podtrans transcribe data/input/podcast.mp3
+conda activate podtrans && podtrans transcribe data/input/podcast.mp3
 ```
 
 **输出**:
@@ -847,7 +848,7 @@ head -30 data/output/podcast/asr_result.json
 ### 7.3 步骤 2: 翻译
 
 ```bash
-uv run podtrans translate data/output/podcast/asr_result.json
+conda activate podtrans && podtrans translate data/output/podcast/asr_result.json
 ```
 
 **输出**:
@@ -908,7 +909,7 @@ SPEAKER_00: 今天我们要讨论一个非常有趣的话题...
 如果你已经部署了 SoulX 服务:
 
 ```bash
-uv run podtrans synthesize data/output/podcast/translation_result.json
+conda activate podtrans && podtrans synthesize data/output/podcast/translation_result.json
 ```
 
 如果没有 TTS 服务,可以跳过这一步,直接使用翻译文本结果。
@@ -945,7 +946,7 @@ cat data/output/podcast/translation_result.txt
 
 ```bash
 # 对比当前结果与 baseline
-uv run python scripts/compare_with_baseline.py
+conda activate podtrans && python scripts/compare_with_baseline.py
 ```
 
 **输出示例**:
@@ -985,8 +986,8 @@ uv run python scripts/compare_with_baseline.py
 
 ```bash
 # 处理 60 分钟的播客
-uv run podtrans transcribe data/input/long_podcast.mp3
-uv run podtrans translate data/output/long_podcast/asr_result.json
+conda activate podtrans && podtrans transcribe data/input/long_podcast.mp3
+conda activate podtrans && podtrans translate data/output/long_podcast/asr_result.json
 ```
 
 #### 2. 调整配置优化性能
@@ -1003,14 +1004,14 @@ WHISPER_MODEL=base      # 只需 150 MB
 
 ```bash
 # 批量测试所有输入文件
-uv run python scripts/test_pipeline.py --batch data/input/*.mp3
+conda activate podtrans && python scripts/test_pipeline.py --batch data/input/*.mp3
 ```
 
 #### 4. 查看模型对比
 
 ```bash
 # 对比不同翻译模型的性能
-uv run python scripts/compare_models.py data/output/podcast/asr_result.json \
+conda activate podtrans && python scripts/compare_models.py data/output/podcast/asr_result.json \
   --models qwen-max,qwen-plus,qwen-turbo
 ```
 
@@ -1032,18 +1033,18 @@ uv run python scripts/compare_models.py data/output/podcast/asr_result.json \
 
 ```bash
 # ASR 相关
-uv run podtrans transcribe <audio> -m large-v2  # 使用更大模型
-uv run podtrans transcribe <audio> -l en        # 指定语言
-uv run podtrans transcribe <audio> --no-diarization  # 禁用说话人分离
+conda activate podtrans && podtrans transcribe <audio> -m large-v2  # 使用更大模型
+conda activate podtrans && podtrans transcribe <audio> -l en        # 指定语言
+conda activate podtrans && podtrans transcribe <audio> --no-diarization  # 禁用说话人分离
 
 # Translation 相关
-uv run podtrans translate <input> -s en -t zh   # 指定源/目标语言
-uv run podtrans translate <input> -o ./output   # 指定输出目录
+conda activate podtrans && podtrans translate <input> -s en -t zh   # 指定源/目标语言
+conda activate podtrans && podtrans translate <input> -o ./output   # 指定输出目录
 
 # 辅助脚本
-uv run python scripts/check_models.py           # 检查模型状态
-uv run python scripts/compare_with_baseline.py  # 对比 baseline
-uv run python scripts/test_pipeline.py          # 完整流程测试
+conda activate podtrans && python scripts/check_models.py           # 检查模型状态
+conda activate podtrans && python scripts/compare_with_baseline.py  # 对比 baseline
+conda activate podtrans && python scripts/test_pipeline.py          # 完整流程测试
 ```
 
 ---
@@ -1090,7 +1091,7 @@ uv run python scripts/test_pipeline.py          # 完整流程测试
 **A**: 可以。修改翻译命令:
 
 ```bash
-uv run podtrans translate <input> -s zh -t en
+conda activate podtrans && podtrans translate <input> -s zh -t en
 ```
 
 ### Q7: 如何清理缓存释放空间?
@@ -1121,7 +1122,7 @@ rm -rf ~/.cache/torch/hub/
 
 2. **运行诊断脚本**:
    ```bash
-   uv run python scripts/check_models.py
+   conda activate podtrans && python scripts/check_models.py
    ```
 
 3. **查看日志**:

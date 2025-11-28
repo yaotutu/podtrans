@@ -8,9 +8,10 @@
 
 ### 1. 系统要求
 
-- **Python**: 3.12+ (必需)
+- **Conda**: 环境和包管理器 (必需)
+- **Python**: 3.11+ (通过 conda 安装)
 - **FFmpeg**: 用于音频处理 (可选但推荐)
-- **uv**: 现代 Python 包管理器 (必需)
+- **CUDA**: 12.1+ (推荐, 用于 GPU 加速)
 - **Git**: 版本控制 (必需)
 
 ### 2. API Keys 准备
@@ -25,22 +26,33 @@
 
 ## 🔧 安装步骤 (10 分钟)
 
-### Step 1: 安装 uv 包管理器
+### Step 1: 安装 Conda
 
-#### macOS / Linux:
+#### 方法一: Miniconda (推荐)
+
+**macOS / Linux**:
 ```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
+curl -O https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh
+bash Miniconda3-latest-Linux-x86_64.sh
 ```
 
-#### Windows:
-```powershell
-powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+**macOS (Apple Silicon)**:
+```bash
+curl -O https://repo.anaconda.com/miniconda/Miniconda3-latest-MacOSX-arm64.sh
+bash Miniconda3-latest-MacOSX-arm64.sh
+```
+
+**Windows**:
+```bash
+# 下载并运行 Miniconda3-latest-Windows-x86_64.exe
+# 或者使用 PowerShell:
+winget install Anaconda.Miniconda3
 ```
 
 #### 验证安装:
 ```bash
-uv --version
-# 预期输出: uv 0.5.x 或更高版本
+conda --version
+# 预期输出: conda 25.9.1 或更高版本
 ```
 
 ---
@@ -59,28 +71,38 @@ cd podtrans
 
 ---
 
-### Step 3: 安装依赖
+### Step 3: 创建 Conda 环境
 
 ```bash
-# 一键安装所有依赖 (包括开发依赖)
-uv sync
+# 创建 conda 环境 (使用 environment.yml)
+conda env create -f environment.yml
 
-# 等待 30 秒 - 2 分钟 (取决于网速)
-# uv 会自动:
-# 1. 创建虚拟环境
-# 2. 下载并安装所有包
-# 3. 锁定版本到 uv.lock
+# 等待 2-5 分钟 (取决于网速)
+# conda 会自动:
+# 1. 创建 Python 3.11 环境
+# 2. 安装 PyTorch 2.8.0 + CUDA 12.1
+# 3. 安装所有必需依赖 (whisperx, pyannote.audio, 等)
+# 4. 安装开发工具 (pytest, ruff, mypy, 等)
+
+# 激活环境
+conda activate podtrans
 ```
 
 **预期输出示例**:
 ```
-Resolved 95 packages in 1.23s
-Installed 95 packages in 45.67s
- + podtrans==0.1.0 (from file:///path/to/podtrans)
- + torch==2.8.0
- + whisperx==3.7.4
- + pyannote-audio==3.3.2
- + ...
+Preparing transaction: done
+Verifying transaction: done
+Executing transaction: done
+Installing pip dependencies:
+ - podtrans==0.1.0
+ - torch==2.8.0
+ - whisperx==3.7.4
+ - pyannote-audio==3.3.2
+ - ...
+Successfully installed podtrans-0.1.0 torch-2.8.0+cu128 ...
+
+To activate this environment, use
+    $ conda activate podtrans
 ```
 
 ---
@@ -152,16 +174,16 @@ TRANSLATION_MAX_TOKENS=120000
 
 ```bash
 # 测试 Python 环境
-uv run python --version
+conda activate podtrans && python --version
 # 预期输出: Python 3.12.x
 
 # 测试包导入
-uv run python -c "from podtrans.asr import WhisperXHandler; print('✅ ASR 模块正常')"
-uv run python -c "from podtrans.translation import Translator; print('✅ Translation 模块正常')"
-uv run python -c "from podtrans.tts import SoulXClient; print('✅ TTS 模块正常')"
+conda activate podtrans && python -c "from podtrans.asr import WhisperXHandler; print('✅ ASR 模块正常')"
+conda activate podtrans && python -c "from podtrans.translation import Translator; print('✅ Translation 模块正常')"
+conda activate podtrans && python -c "from podtrans.tts import SoulXClient; print('✅ TTS 模块正常')"
 
 # 测试配置加载
-uv run python -c "from podtrans.config import get_settings; s=get_settings(); print(f'✅ HF_TOKEN: {s.hf_token[:8]}...' if s.hf_token else '❌ 缺少 HF_TOKEN')"
+conda activate podtrans && python -c "from podtrans.config import get_settings; s=get_settings(); print(f'✅ HF_TOKEN: {s.hf_token[:8]}...' if s.hf_token else '❌ 缺少 HF_TOKEN')"
 ```
 
 **预期输出**:
@@ -184,18 +206,18 @@ uv run python -c "from podtrans.config import get_settings; s=get_settings(); pr
 
 ```bash
 # 方法 1: 使用预下载脚本 (只下载 Whisper 模型)
-uv run python scripts/preload_models.py
+conda activate podtrans && python scripts/preload_models.py
 
 # 方法 2: 运行一次完整流程 (下载所有模型,推荐)
 # 准备一个 30-60 秒的测试音频文件
-uv run podtrans transcribe data/input/test.mp3
+conda activate podtrans && podtrans transcribe data/input/test.mp3
 ```
 
 **检查模型下载状态**:
 
 ```bash
 # 检查所有模型是否已下载
-uv run python scripts/check_models.py
+conda activate podtrans && python scripts/check_models.py
 ```
 
 **预期输出**:
@@ -246,7 +268,7 @@ ls data/input/
 
 ```bash
 # 运行 ASR 模块 (预计耗时: 30 秒音频 ~10-15 秒)
-uv run podtrans transcribe data/input/test.mp3
+conda activate podtrans && podtrans transcribe data/input/test.mp3
 
 # 成功后会看到:
 # ✅ ASR completed successfully!
@@ -278,7 +300,7 @@ cat data/output/test/asr_result.json | head -30
 
 ```bash
 # 运行翻译模块 (预计耗时: ~5-10 秒)
-uv run podtrans translate data/output/test/asr_result.json
+conda activate podtrans && podtrans translate data/output/test/asr_result.json
 
 # 成功后会看到:
 # ✅ Translation completed successfully!
@@ -325,27 +347,27 @@ cat data/output/test/translation_result.json | head -30
 
 ```bash
 # 1. ASR - 语音识别 + 说话人分离
-uv run podtrans transcribe data/input/demo.mp3
+conda activate podtrans && podtrans transcribe data/input/demo.mp3
 
 # ASR 选项:
-uv run podtrans transcribe demo.mp3 -o ./my_output      # 指定输出目录
-uv run podtrans transcribe demo.mp3 -l en              # 指定语言
-uv run podtrans transcribe demo.mp3 --no-diarization   # 禁用说话人分离
-uv run podtrans transcribe demo.mp3 -m large-v3        # 指定 Whisper 模型
+conda activate podtrans && podtrans transcribe demo.mp3 -o ./my_output      # 指定输出目录
+conda activate podtrans && podtrans transcribe demo.mp3 -l en              # 指定语言
+conda activate podtrans && podtrans transcribe demo.mp3 --no-diarization   # 禁用说话人分离
+conda activate podtrans && podtrans transcribe demo.mp3 -m large-v3        # 指定 Whisper 模型
 
 # 2. Translation - 翻译
-uv run podtrans translate data/output/demo/asr_result.json
+conda activate podtrans && podtrans translate data/output/demo/asr_result.json
 
 # Translation 选项:
-uv run podtrans translate asr_result.json -s en -t zh  # 指定源/目标语言
-uv run podtrans translate asr_result.json -o ./trans   # 指定输出目录
+conda activate podtrans && podtrans translate asr_result.json -s en -t zh  # 指定源/目标语言
+conda activate podtrans && podtrans translate asr_result.json -o ./trans   # 指定输出目录
 
 # 3. TTS - 音频生成 (需要外部 SoulX 服务)
-uv run podtrans synthesize data/output/demo/translation_result.json
+conda activate podtrans && podtrans synthesize data/output/demo/translation_result.json
 
 # TTS 选项:
-uv run podtrans synthesize trans.json -o output.wav    # 指定输出文件
-uv run podtrans synthesize trans.json \
+conda activate podtrans && podtrans synthesize trans.json -o output.wav    # 指定输出文件
+conda activate podtrans && podtrans synthesize trans.json \
   --speaker-audio SPEAKER_00=voices/male.wav \
   --speaker-audio SPEAKER_01=voices/female.wav         # 提供语音样本
 ```
@@ -354,30 +376,30 @@ uv run podtrans synthesize trans.json \
 
 ```bash
 # 对比当前输出与 baseline
-uv run python scripts/compare_with_baseline.py
+conda activate podtrans && python scripts/compare_with_baseline.py
 
 # 更新 baseline (会先显示对比结果)
-uv run python scripts/update_baseline.py
+conda activate podtrans && python scripts/update_baseline.py
 
 # 转换为 SoulX 格式
-uv run python scripts/convert_to_soulx.py
+conda activate podtrans && python scripts/convert_to_soulx.py
 ```
 
 ### 开发和测试
 
 ```bash
 # 运行所有测试
-uv run pytest
+conda activate podtrans && pytest
 
 # 运行特定测试
-uv run pytest tests/unit/          # 单元测试
-uv run pytest tests/integration/   # 集成测试
-uv run pytest -m "not slow"        # 跳过慢速测试
+conda activate podtrans && pytest tests/unit/          # 单元测试
+conda activate podtrans && pytest tests/integration/   # 集成测试
+conda activate podtrans && pytest -m "not slow"        # 跳过慢速测试
 
 # 代码检查
-uv run ruff check .                # Linting
-uv run ruff format .               # 格式化
-uv run mypy src/                   # 类型检查
+conda activate podtrans && ruff check .                # Linting
+conda activate podtrans && ruff format .               # 格式化
+conda activate podtrans && mypy src/                   # 类型检查
 ```
 
 ---

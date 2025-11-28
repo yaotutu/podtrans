@@ -25,8 +25,8 @@ English Audio → ASR (WhisperX) → Translation (Qwen) → TTS (SoulX) → Chin
 ## 🔧 核心技术栈
 
 ### 基础框架
-- **Python 3.12+** - 现代 Python 特性
-- **uv** - 快速包管理器
+- **Python 3.11+** - 现代 Python 特性
+- **Conda** - 环境和包管理
 - **Pydantic v2** - 数据验证和配置管理
 - **Typer** - CLI 框架
 - **Rich** - 终端美化输出
@@ -49,13 +49,17 @@ English Audio → ASR (WhisperX) → Translation (Qwen) → TTS (SoulX) → Chin
 ### 环境设置
 
 ```bash
-# 1. 安装依赖
-uv sync
+# 1. 从 uv 迁移到 conda (如果需要)
+rm -rf .venv  # 删除旧的 uv 虚拟环境 (可选)
 
-# 2. 配置环境变量
+# 2. 创建并激活 conda 环境
+conda env create -f environment.yml
+conda activate podtrans
+
+# 3. 配置环境变量
 cp .env.example .env
 
-# 3. 编辑 .env 文件，填入必需的 API keys:
+# 4. 编辑 .env 文件，填入必需的 API keys:
 #    - HF_TOKEN: HuggingFace token (用于说话人分离)
 #    - DASHSCOPE_API_KEY: 阿里云 DashScope API key (用于翻译)
 #    - SOULX_API_URL: SoulX-Podcast 服务地址 (可选)
@@ -82,57 +86,63 @@ cp .env.example .env
 
 ```bash
 # 1. ASR - 语音识别 + 说话人分离
-uv run podtrans transcribe data/input/demo.mp3
+python -m podtrans.cli transcribe data/input/demo.mp3
 
 # 2. 翻译
-uv run podtrans translate data/output/demo/asr_result.json
+python -m podtrans.cli translate data/output/demo/asr_result.json
 
 # 3. TTS - 音频生成 (需要外部 SoulX 服务)
-uv run podtrans synthesize data/output/demo/translation_result.json
+python -m podtrans.cli synthesize data/output/demo/translation_result.json
 ```
 
 ### ASR 选项
 
 ```bash
 # 指定输出目录
-uv run podtrans transcribe podcast.mp3 -o ./my_output
+python -m podtrans.cli transcribe podcast.mp3 -o ./my_output
 
 # 指定语言（跳过自动检测）
-uv run podtrans transcribe podcast.mp3 -l en
+python -m podtrans.cli transcribe podcast.mp3 -l en
 
 # 禁用说话人分离
-uv run podtrans transcribe podcast.mp3 --no-diarization
+python -m podtrans.cli transcribe podcast.mp3 --no-diarization
 
 # 指定 Whisper 模型
-uv run podtrans transcribe podcast.mp3 -m large-v3
+python -m podtrans.cli transcribe podcast.mp3 -m large-v3
+
+# GPU 模式（推荐，更快）
+python -m podtrans.cli transcribe podcast.mp3 --device cuda
+
+# CPU 模式（兼容性更好）
+python -m podtrans.cli transcribe podcast.mp3 --device cpu
 ```
 
 ### 翻译选项
 
 ```bash
 # 指定源语言和目标语言
-uv run podtrans translate asr_result.json -s en -t zh
+python -m podtrans.cli translate asr_result.json -s en -t zh
 
 # 指定输出目录
-uv run podtrans translate asr_result.json -o ./translations
+python -m podtrans.cli translate asr_result.json -o ./translations
 ```
 
 ### TTS 选项
 
 ```bash
 # 基础用法
-uv run podtrans synthesize translation_result.json
+python -m podtrans.cli synthesize translation_result.json
 
 # 指定输出文件
-uv run podtrans synthesize translation_result.json -o output.wav
+python -m podtrans.cli synthesize translation_result.json -o output.wav
 
 # 提供说话人语音样本
-uv run podtrans synthesize translation_result.json \
+python -m podtrans.cli synthesize translation_result.json \
   --speaker-audio SPEAKER_00=voices/male.wav \
   --speaker-audio SPEAKER_01=voices/female.wav
 
 # 提供说话人描述
-uv run podtrans synthesize translation_result.json \
+python -m podtrans.cli synthesize translation_result.json \
   --speaker-desc SPEAKER_00=中年男性，声音低沉 \
   --speaker-desc SPEAKER_01=年轻女性，声音清脆
 ```
@@ -141,34 +151,34 @@ uv run podtrans synthesize translation_result.json \
 
 ```bash
 # 对比当前输出与 baseline
-uv run python scripts/compare_with_baseline.py
+python scripts/compare_with_baseline.py
 
 # 更新 baseline（会先显示对比结果并询问确认）
-uv run python scripts/update_baseline.py
+python scripts/update_baseline.py
 
 # 手动转换为 SoulX 格式（用于外部测试）
-uv run python scripts/convert_to_soulx.py
+python scripts/convert_to_soulx.py
 ```
 
 ### 开发和测试
 
 ```bash
 # 运行所有测试
-uv run pytest
+pytest
 
 # 运行特定类型测试
-uv run pytest tests/unit/          # 单元测试
-uv run pytest tests/integration/   # 集成测试
-uv run pytest -m "not slow"        # 跳过慢速测试
+pytest tests/unit/          # 单元测试
+pytest tests/integration/   # 集成测试
+pytest -m "not slow"        # 跳过慢速测试
 
 # 生成覆盖率报告
-uv run pytest --cov=src/podtrans --cov-report=html
+pytest --cov=src/podtrans --cov-report=html
 
 # 代码检查
-uv run ruff check .                # Linting
-uv run ruff format .               # 格式化
-uv run mypy src/                   # 类型检查
-uv run ruff check --fix .          # 自动修复问题
+ruff check .                # Linting
+ruff format .               # 格式化
+mypy src/                   # 类型检查
+ruff check --fix .          # 自动修复问题
 ```
 
 ---
