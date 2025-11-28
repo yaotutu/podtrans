@@ -1,0 +1,80 @@
+name: podtrans
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+  - huggingface
+  - defaults
+
+dependencies:
+  # Python version
+  - python=3.11
+
+  # Core ML/DL stack with CUDA support (let conda choose compatible versions)
+  - pytorch
+  - torchvision
+  - torchaudio
+  - pytorch-cuda=12.1
+
+  # Data science and numerical computing
+  - numpy
+  - pandas
+  - scipy
+  - scikit-learn
+
+  # Audio processing
+  - librosa
+  - sox
+
+  # Build tools
+  - cmake
+  - pkg-config
+
+  # Package management
+  - pip
+
+  # Pip dependencies (conda-forge packages that aren't available or better via pip)
+  - pip:
+    # Core framework
+    - typer[all]>=0.15.0
+    - pydantic>=2.10.0
+    - pydantic-settings>=2.7.0
+
+    # Logging and progress
+    - loguru>=0.7.3
+    - rich>=13.9.0
+
+    # ASR specific packages
+    - whisperx>=3.7.4
+    - pyannote.audio==3.3.2
+
+    # Translation
+    - openai>=1.58.0
+    - tiktoken>=0.8.0
+
+    # TTS
+    - httpx>=0.27.0
+
+    # Audio processing (additional)
+    - pydub>=0.25.1
+
+    # Data processing
+    - orjson>=3.10.0
+
+    # Environment variables
+    - python-dotenv>=1.0.0
+
+    # Development dependencies
+    - pytest>=8.3.0
+    - pytest-cov>=6.0.0
+    - pytest-mock>=3.14.0
+    - pytest-asyncio>=0.24.0
+    - ruff>=0.8.0
+    - mypy>=1.13.0
+    - types-requests
+
+    # Additional dependencies that might be needed
+    - huggingface-hub
+    - transformers
+    - sentencepiece
+    - protobuf

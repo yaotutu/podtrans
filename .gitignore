@@ -116,5 +116,6 @@ data/output/**/*.json
 secrets.json
 credentials.json
 
-# uv lock file (optional - some prefer to commit this)
-# uv.lock
+# Package manager lock files
+uv.lock
+condaenv.*.requirements.txt
