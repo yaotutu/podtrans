@@ -692,7 +692,9 @@ uv run ruff format .       # 格式化
 ## 🔗 相关文档
 
 - **README.md** - 项目介绍和快速开始
-- **docs/SETUP_GUIDE.md** - 新电脑快速启动指南 (10 分钟上手)
+- **docs/GETTING_STARTED.md** - 完全上手指南 (手把手教程,新用户必读!)
+- **docs/SETUP_GUIDE.md** - 快速安装指南 (10 分钟上手)
+- **docs/MODEL_DOWNLOAD_GUIDE.md** - 模型下载完全指南
 - **docs/BASELINE_SYSTEM.md** - 基准系统完整文档
 - **docs/CHANGELOG.md** - 变更日志
 - **scripts/README.md** - 脚本工具使用指南

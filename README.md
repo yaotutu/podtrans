@@ -94,8 +94,9 @@ uv run python -c "from podtrans.asr import WhisperXHandler; print('✅ 安装成
 ```
 
 **详细文档**:
-- [SETUP_GUIDE.md](docs/SETUP_GUIDE.md) - 完整安装指南
-- [MODEL_DOWNLOAD_GUIDE.md](docs/MODEL_DOWNLOAD_GUIDE.md) - 模型下载详解 (首次运行必读!)
+- **[GETTING_STARTED.md](docs/GETTING_STARTED.md)** - 🌟 **完全上手指南** (手把手教程,新用户必读!)
+- [SETUP_GUIDE.md](docs/SETUP_GUIDE.md) - 快速安装指南
+- [MODEL_DOWNLOAD_GUIDE.md](docs/MODEL_DOWNLOAD_GUIDE.md) - 模型下载详解
 
 ---
 
@@ -378,8 +379,9 @@ COMPUTE_TYPE=int8
 
 | 文档 | 说明 |
 |------|------|
-| [SETUP_GUIDE.md](docs/SETUP_GUIDE.md) | **⭐ 新电脑快速启动指南** (10 分钟上手) |
-| [MODEL_DOWNLOAD_GUIDE.md](docs/MODEL_DOWNLOAD_GUIDE.md) | **📦 模型下载完全指南** (解决下载问题) |
+| [GETTING_STARTED.md](docs/GETTING_STARTED.md) | **🌟 完全上手指南** (手把手教程,新用户必读!) |
+| [SETUP_GUIDE.md](docs/SETUP_GUIDE.md) | 快速安装指南 (10 分钟上手) |
+| [MODEL_DOWNLOAD_GUIDE.md](docs/MODEL_DOWNLOAD_GUIDE.md) | 模型下载完全指南 (解决下载问题) |
 | [CLAUDE.md](CLAUDE.md) | 完整开发指引 (最详细) |
 | [BASELINE_SYSTEM.md](docs/BASELINE_SYSTEM.md) | 基准版本管理系统 |
 | [scripts/README.md](scripts/README.md) | 辅助脚本使用说明 |
