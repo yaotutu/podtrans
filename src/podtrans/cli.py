@@ -16,7 +16,7 @@ from podtrans.config import get_settings
 from podtrans.models import PipelineMetadata, StageStatus
 from podtrans.translation import Translator
 from podtrans.translation.schemas import TranslationResult
-from podtrans.tts import SoulXClient
+from podtrans.tts.factory import create_tts_service
 from podtrans.tts.schemas import SpeakerConfig
 from podtrans.utils.audio import get_audio_duration, validate_audio_file
 from podtrans.utils.file import read_json, write_json
@@ -413,30 +413,51 @@ def synthesize(
         "-d",
         help="Speaker voice descriptions (format: SPEAKER_ID=中年男性，声音低沉)",
     ),
+    # SoulX CLI specific options
+    temperature: float = typer.Option(
+        None,
+        "--temperature",
+        "-t",
+        help="Generation temperature for CLI backend (0.1-2.0, default: 0.7)",
+    ),
+    top_p: float = typer.Option(
+        None,
+        "--top-p",
+        help="Top-p sampling for CLI backend (0.1-1.0, default: 0.9)",
+    ),
+    model: str = typer.Option(
+        None,
+        "--model",
+        "-m",
+        help="Model name for CLI backend (default: SoulX-Podcast-1.7B)",
+    ),
 ) -> None:
-    """Generate podcast audio from translation result using TTS.
+    """Generate podcast audio from translation result using SoulX CLI.
 
     This command synthesizes audio from the translated text using the SoulX-Podcast
-    TTS service. It preserves speaker information and generates natural-sounding
-    podcast audio.
+    CLI TTS service, preserving speaker information and generating natural-sounding podcast audio.
 
-    Example:
+    Examples:
+        # Basic usage
         podtrans synthesize data/output/demo/translation_result.json
 
+        # Specify output file
         podtrans synthesize translation_result.json -o output.wav
 
+        # CLI with custom parameters
+        podtrans synthesize translation_result.json --temperature 0.8
+
+        # With speaker configurations
         podtrans synthesize translation_result.json \\
             --speaker-audio SPEAKER_00=voices/male.wav \\
-            --speaker-audio SPEAKER_01=voices/female.wav
-
-        podtrans synthesize translation_result.json \\
+            --speaker-audio SPEAKER_01=voices/female.wav \\
             --speaker-desc SPEAKER_00=中年男性，声音低沉 \\
             --speaker-desc SPEAKER_01=年轻女性，声音清脆
     """
     settings = get_settings()
 
     # Display header
-    console.print("\n[bold blue]🎙️  PodTrans - TTS Synthesis[/bold blue]\n")
+    console.print("\n[bold blue]🎙️  PodTrans - TTS Synthesis (SoulX CLI)[/bold blue]\n")
     console.print(f"[dim]Translation result:[/dim] {translation_json}\n")
 
     # Determine output path
@@ -526,40 +547,52 @@ def synthesize(
         logger.exception("Translation loading error")
         raise typer.Exit(1)
 
-    # Initialize SoulX client
-    console.print("[bold cyan]🔧 Initializing TTS client...[/bold cyan]")
+    # Initialize SoulX CLI client
+    console.print("[bold cyan]🔧 Initializing SoulX CLI client...[/bold cyan]")
     try:
-        tts_client = SoulXClient(settings)
-        console.print(f"[green]✓[/green] SoulX API: {settings.soulx_api_url}")
-        console.print(f"[green]✓[/green] Timeout: {settings.soulx_timeout}s\n")
+        tts_client = create_tts_service()
+        console.print(f"[green]✓[/green] SoulX CLI: {settings.soulx_cli_path}")
+        console.print(f"[green]✓[/green] Model: {settings.soulx_cli_model}")
+        console.print(f"[green]✓[/green] Environment: {settings.soulx_conda_env}")
+        console.print()
     except Exception as e:
-        console.print(f"[bold red]❌ Failed to initialize TTS client: {e}[/bold red]")
+        console.print(f"[bold red]❌ Failed to initialize SoulX CLI client: {e}[/bold red]")
+        logger.exception("TTS client initialization error")
         raise typer.Exit(1)
 
-    # Convert format
-    console.print("[bold cyan]🔄 Converting to SoulX format...[/bold cyan]")
-    try:
-        soulx_script = tts_client.convert_format(
-            translation_result,
-            speaker_configs if speaker_configs else None,
-        )
-        console.print(
-            f"[green]✓[/green] Script ready: {len(soulx_script['text'])} segments"
-        )
-        console.print(f"[green]✓[/green] Speakers: {len(soulx_script['speakers'])}\n")
-    except Exception as e:
-        console.print(f"[bold red]❌ Format conversion failed: {e}[/bold red]")
-        logger.exception("Format conversion error")
-        raise typer.Exit(1)
+    # Prepare synthesis parameters
+    synthesize_kwargs = {}
+
+    # Add CLI-specific parameters
+    if temperature is not None:
+        synthesize_kwargs["temperature"] = temperature
+    if top_p is not None:
+        synthesize_kwargs["top_p"] = top_p
+    if model is not None:
+        synthesize_kwargs["model"] = model
+
+    # Add speaker configurations to kwargs
+    for config in speaker_configs:
+        if config.voice_sample:
+            synthesize_kwargs[f"speaker_{config.speaker_id.split('_')[1]}_audio"] = config.voice_sample
+        if config.voice_description:
+            synthesize_kwargs[f"speaker_{config.speaker_id.split('_')[1]}_desc"] = config.voice_description
+
+    # CLI backend - format conversion happens in synthesize method
+    console.print("[bold cyan]🔄 Preparing synthesis parameters...[/bold cyan]")
+    console.print(f"[green]✓[/green] Translation segments: {len(translation_result.segments)}")
+    console.print(f"[green]✓[/green] Speakers: {len(set(s.speaker for s in translation_result.segments if s.speaker))}\n")
 
     # Synthesize audio
     console.print("[bold cyan]🚀 Synthesizing audio...[/bold cyan]")
     console.print("[dim]This may take several minutes for long podcasts...[/dim]\n")
 
     try:
+        # CLI backend - pass translation result directly
         tts_result = tts_client.synthesize(
-            script=soulx_script,
-            output_path=output_path,
+            translation_result,
+            output_path,
+            **synthesize_kwargs
         )
 
         # Display summary

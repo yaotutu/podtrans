@@ -39,7 +39,11 @@
       "Bash(export WHISPER_MODEL=medium:*)",
       "Bash(conda env config vars set:*)",
       "Bash(conda deactivate:*)",
-      "Bash(time python:*)"
+      "Bash(time python:*)",
+      "Bash(conda info:*)",
+      "Bash(xargs:*)",
+      "Bash(chmod:*)",
+      "Bash(bash:*)"
     ],
     "deny": [],
     "ask": []

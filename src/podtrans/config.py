@@ -97,19 +97,38 @@ class Settings(BaseSettings):
     )
 
     # ===================================
-    # TTS Configuration
-    # ===================================
-    soulx_api_url: str = Field(
-        default="http://localhost:8000",
-        description="SoulX-Podcast API URL",
+    # SoulX CLI Configuration
+    soulx_cli_path: str = Field(
+        default="soulx-podcast",
+        description="Path to SoulX-Podcast CLI executable",
     )
-    soulx_timeout: float = Field(
-        default=300.0,
-        ge=10.0,
-        le=3600.0,
-        description="SoulX API request timeout in seconds (default: 5 minutes)",
+    soulx_cli_model: str = Field(
+        default="SoulX-Podcast-1.7B",
+        description="SoulX CLI model name",
     )
-
+    soulx_cli_timeout: int = Field(
+        default=300,
+        ge=60,
+        le=3600,
+        description="SoulX CLI timeout in seconds",
+    )
+    soulx_cli_temperature: float = Field(
+        default=0.7,
+        ge=0.1,
+        le=2.0,
+        description="SoulX CLI generation temperature",
+    )
+    soulx_cli_top_p: float = Field(
+        default=0.9,
+        ge=0.1,
+        le=1.0,
+        description="SoulX CLI top-p sampling",
+    )
+    soulx_conda_env: str = Field(
+        default="soulx-podcast",
+        description="Conda environment name for SoulX CLI",
+    )
+    
     # ===================================
     # Processing Configuration
     # ===================================
