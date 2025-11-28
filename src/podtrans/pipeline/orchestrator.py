@@ -6,7 +6,6 @@ the complete podcast translation pipeline without using subprocess calls.
 
 from pathlib import Path
 from typing import Optional
-from datetime import datetime
 import asyncio
 
 from loguru import logger
@@ -16,7 +15,8 @@ from podtrans.config import get_settings
 from podtrans.asr.whisperx_handler import WhisperXHandler
 from podtrans.translation.translator import Translator
 from podtrans.tts.factory import create_tts_service
-from podtrans.utils.audio import get_audio_duration, validate_audio_file
+from podtrans.tts.schemas import SpeakerConfig
+from podtrans.utils.file import write_json
 
 
 class PipelineOrchestrator:
@@ -48,6 +48,7 @@ class PipelineOrchestrator:
         self._asr_result = None
         self._translation_result = None
         self._tts_result = None
+        self._voice_samples_result = None
 
     @property
     def asr_handler(self) -> WhisperXHandler:
@@ -76,9 +77,13 @@ class PipelineOrchestrator:
         language: Optional[str] = None,
         enable_diarization: bool = True,
         source_lang: str = "en",
-        target_lang: str = "zh"
+        target_lang: str = "zh",
+        extract_voice_samples: Optional[bool] = None,
+        min_duration: Optional[float] = None,
+        max_duration: Optional[float] = None,
+        min_quality: Optional[float] = None,
     ) -> PipelineMetadata:
-        """Run the complete pipeline (ASR → Translation → TTS).
+        """Run the complete pipeline (ASR → Translation → TTS → Voice Samples).
 
         Args:
             audio_path: Path to input audio file
@@ -86,6 +91,10 @@ class PipelineOrchestrator:
             enable_diarization: Whether to perform speaker diarization
             source_lang: Source language for translation
             target_lang: Target language for translation
+            extract_voice_samples: Whether to extract voice cloning samples
+            min_duration: Minimum sample duration for voice samples (seconds)
+            max_duration: Maximum sample duration for voice samples (seconds)
+            min_quality: Minimum quality score for voice samples (0-100)
 
         Returns:
             PipelineMetadata with complete execution information
@@ -95,18 +104,48 @@ class PipelineOrchestrator:
             output_dir=self.output_dir,
         )
 
+        # Apply default values from settings if not provided
+        if extract_voice_samples is None:
+            extract_voice_samples = self.settings.voice_sample_extract_enabled
+        if min_duration is None:
+            min_duration = self.settings.voice_sample_min_duration
+        if max_duration is None:
+            max_duration = self.settings.voice_sample_max_duration
+        if min_quality is None:
+            min_quality = self.settings.voice_sample_min_quality
+
         try:
             # Stage 1: ASR
-            await self._run_asr_stage(audio_path, language, enable_diarization, pipeline_meta)
+            await self._run_asr_stage(
+                audio_path, language, enable_diarization, pipeline_meta
+            )
 
-            # Stage 2: Translation
+            # Stage 2: Voice Samples (extracted from ASR result)
+            if extract_voice_samples:
+                asr_stage = pipeline_meta.get_stage("asr")
+                if asr_stage is not None and asr_stage.status == StageStatus.SUCCESS:
+                    await self._run_voice_samples_stage(
+                        audio_path,
+                        min_duration,
+                        max_duration,
+                        min_quality,
+                        self.settings.voice_sample_max_gap,
+                        pipeline_meta,
+                    )
+
+            # Stage 3: Translation
             asr_stage = pipeline_meta.get_stage("asr")
             if asr_stage is not None and asr_stage.status == StageStatus.SUCCESS:
-                await self._run_translation_stage(source_lang, target_lang, pipeline_meta)
+                await self._run_translation_stage(
+                    source_lang, target_lang, pipeline_meta
+                )
 
-            # Stage 3: TTS
+            # Stage 4: TTS
             translation_stage = pipeline_meta.get_stage("translation")
-            if translation_stage is not None and translation_stage.status == StageStatus.SUCCESS:
+            if (
+                translation_stage is not None
+                and translation_stage.status == StageStatus.SUCCESS
+            ):
                 await self._run_tts_stage(pipeline_meta)
 
         except Exception as e:
@@ -125,7 +164,7 @@ class PipelineOrchestrator:
         audio_path: Path,
         language: Optional[str],
         enable_diarization: bool,
-        pipeline_meta: PipelineMetadata
+        pipeline_meta: PipelineMetadata,
     ) -> None:
         """Run the ASR stage."""
         logger.info(f"Starting ASR stage for {audio_path}")
@@ -139,7 +178,7 @@ class PipelineOrchestrator:
                     audio_path=audio_path,
                     language=language,
                     enable_diarization=enable_diarization,
-                )
+                ),
             )
 
             # Store result and update metadata
@@ -149,15 +188,17 @@ class PipelineOrchestrator:
                 StageStatus.SUCCESS,
                 segments=asr_result.total_segments,
                 speakers=asr_result.speaker_count,
-                language=asr_result.language
+                language=asr_result.language,
             )
 
             # Save ASR result to file
             asr_file = self.output_dir / "asr_result.json"
             asr_file.write_text(asr_result.model_dump_json(indent=2))
 
-            logger.info(f"ASR stage completed: {asr_result.total_segments} segments, "
-                       f"{asr_result.speaker_count} speakers")
+            logger.info(
+                f"ASR stage completed: {asr_result.total_segments} segments, "
+                f"{asr_result.speaker_count} speakers"
+            )
 
         except Exception as e:
             pipeline_meta.update_stage("asr", StageStatus.FAILED, error=str(e))
@@ -165,10 +206,7 @@ class PipelineOrchestrator:
             raise
 
     async def _run_translation_stage(
-        self,
-        source_lang: str,
-        target_lang: str,
-        pipeline_meta: PipelineMetadata
+        self, source_lang: str, target_lang: str, pipeline_meta: PipelineMetadata
     ) -> None:
         """Run the Translation stage."""
         logger.info(f"Starting Translation stage: {source_lang} → {target_lang}")
@@ -180,7 +218,7 @@ class PipelineOrchestrator:
                 None,
                 lambda: self.translator.translate_asr_result(
                     self._asr_result, source_lang, target_lang
-                )
+                ),
             )
 
             # Store result and update metadata
@@ -189,14 +227,16 @@ class PipelineOrchestrator:
                 "translation",
                 StageStatus.SUCCESS,
                 segments=translation_result.total_segments,
-                speakers=translation_result.speaker_count
+                speakers=translation_result.speaker_count,
             )
 
             # Save translation result to file
             trans_file = self.output_dir / "translation_result.json"
             trans_file.write_text(translation_result.model_dump_json(indent=2))
 
-            logger.info(f"Translation stage completed: {translation_result.total_segments} segments")
+            logger.info(
+                f"Translation stage completed: {translation_result.total_segments} segments"
+            )
 
         except Exception as e:
             pipeline_meta.update_stage("translation", StageStatus.FAILED, error=str(e))
@@ -213,10 +253,17 @@ class PipelineOrchestrator:
             audio_name = Path(pipeline_meta.audio_file).stem
             output_path = self.output_dir / f"{audio_name}_chinese.wav"
 
-            # Run TTS processing
+            # Create speaker configs from voice samples if available
+            speaker_configs = None
+            if self._voice_samples_result:
+                speaker_configs = self._create_speaker_configs()
+
+            # Run TTS processing with voice samples if available
             tts_result = await asyncio.get_event_loop().run_in_executor(
                 None,
-                lambda: self.tts_service.synthesize(self._translation_result, output_path)
+                lambda: self.tts_service.synthesize_from_translation(
+                    self._translation_result, output_path, speaker_configs
+                ),
             )
 
             # Store result and update metadata
@@ -225,7 +272,7 @@ class PipelineOrchestrator:
                 "tts",
                 StageStatus.SUCCESS,
                 audio_file=str(output_path),
-                duration=tts_result.duration
+                duration=tts_result.duration,
             )
 
             logger.info(f"TTS stage completed: {output_path}")
@@ -234,6 +281,132 @@ class PipelineOrchestrator:
             pipeline_meta.update_stage("tts", StageStatus.FAILED, error=str(e))
             logger.error(f"TTS stage failed: {e}")
             raise
+
+    async def _run_voice_samples_stage(
+        self,
+        audio_path: Path,
+        min_duration: float,
+        max_duration: float,
+        min_quality: float,
+        max_gap: float,
+        pipeline_meta: PipelineMetadata,
+    ) -> None:
+        """Run the voice samples extraction stage."""
+        logger.info("Starting voice samples extraction stage")
+        pipeline_meta.update_stage("voice_samples", StageStatus.RUNNING)
+
+        try:
+            # Create voice samples directory with audio filename
+            audio_name = Path(pipeline_meta.audio_file).stem
+            voice_samples_dir = self.output_dir / f"{audio_name}_voice_samples"
+            voice_samples_dir.mkdir(exist_ok=True)
+
+            # Extract voice samples using the ASR handler
+            voice_samples_result = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: self.asr_handler.extract_voice_samples(
+                    audio_path=audio_path,
+                    asr_result=self._asr_result,
+                    min_duration=min_duration,
+                    max_duration=max_duration,
+                    min_quality=min_quality,
+                    max_gap=max_gap,
+                    output_dir=voice_samples_dir,
+                ),
+            )
+
+            # Update the output paths to be relative to the output directory
+            for speaker_id, sample in voice_samples_result.speaker_samples.items():
+                # Update audio path to be relative to output directory
+                sample.audio_path = (
+                    voice_samples_dir / speaker_id / sample.audio_path.name
+                )
+
+            # Save voice samples result
+            self._voice_samples_result = voice_samples_result
+
+            # Save detailed summary
+            summary_file = voice_samples_dir / "extraction_summary.json"
+            extraction_summary = {
+                "extraction_time": voice_samples_result.extraction_time.isoformat(),
+                "source_audio": str(audio_path),
+                "parameters": {
+                    "min_duration": min_duration,
+                    "max_duration": max_duration,
+                    "min_quality": min_quality,
+                    "max_gap": max_gap,
+                },
+                "summary": voice_samples_result.extraction_summary,
+                "samples": {
+                    speaker_id: {
+                        "quality_score": sample.quality_score,
+                        "duration": sample.duration,
+                        "words_count": sample.words_count,
+                        "recommended_use": sample.recommended_use,
+                        "audio_path": str(
+                            sample.audio_path.relative_to(self.output_dir)
+                        ),
+                    }
+                    for speaker_id, sample in voice_samples_result.speaker_samples.items()
+                },
+            }
+
+            write_json(extraction_summary, summary_file, indent=2)
+
+            # Update pipeline metadata
+            pipeline_meta.update_stage(
+                "voice_samples",
+                StageStatus.SUCCESS,
+                output_files={
+                    "voice_samples_dir": str(
+                        voice_samples_dir.relative_to(self.output_dir)
+                    ),
+                    "extraction_summary": str(
+                        summary_file.relative_to(self.output_dir)
+                    ),
+                    "samples_count": voice_samples_result.total_samples,
+                    "speakers_count": voice_samples_result.total_speakers,
+                },
+            )
+
+            logger.info(
+                f"Voice samples extraction completed: "
+                f"{voice_samples_result.total_samples} samples from {voice_samples_result.total_speakers} speakers"
+            )
+
+        except Exception as e:
+            pipeline_meta.update_stage(
+                "voice_samples", StageStatus.FAILED, error=str(e)
+            )
+            logger.error(f"Voice samples extraction stage failed: {e}")
+            raise
+
+    def _create_speaker_configs(self) -> list[SpeakerConfig]:
+        """Create speaker configs from voice samples for TTS.
+
+        Returns:
+            List of SpeakerConfig objects with voice sample paths
+        """
+        speaker_configs = []
+
+        if not self._voice_samples_result:
+            return speaker_configs
+
+        for (
+            speaker_id,
+            voice_sample,
+        ) in self._voice_samples_result.speaker_samples.items():
+            config = SpeakerConfig(
+                speaker_id=speaker_id,
+                voice_sample=voice_sample.audio_path,
+                voice_description=voice_sample.recommended_use,
+            )
+            speaker_configs.append(config)
+
+        logger.info(
+            f"Created {len(speaker_configs)} speaker configs from voice samples"
+        )
+        return speaker_configs
 
     def _save_pipeline_metadata(self, pipeline_meta: PipelineMetadata) -> None:
         """Save pipeline metadata to file."""
@@ -251,22 +424,21 @@ class PipelineOrchestrator:
             Dictionary with timing information for each stage
         """
         analysis = {}
-        total_time = 0.0
 
-        if hasattr(self, '_asr_result') and self._asr_result:
+        if hasattr(self, "_asr_result") and self._asr_result:
             # Note: ASR timing would need to be tracked during processing
             # This is a placeholder for future enhancement
-            analysis['asr'] = {'duration': 0.0, 'status': 'completed'}
+            analysis["asr"] = {"duration": 0.0, "status": "completed"}
 
-        if hasattr(self, '_translation_result') and self._translation_result:
+        if hasattr(self, "_translation_result") and self._translation_result:
             # Note: Translation timing would need to be tracked during processing
             # This is a placeholder for future enhancement
-            analysis['translation'] = {'duration': 0.0, 'status': 'completed'}
+            analysis["translation"] = {"duration": 0.0, "status": "completed"}
 
-        if hasattr(self, '_tts_result') and self._tts_result:
-            analysis['tts'] = {
-                'duration': self._tts_result.duration or 0.0,
-                'status': 'completed'
+        if hasattr(self, "_tts_result") and self._tts_result:
+            analysis["tts"] = {
+                "duration": self._tts_result.duration or 0.0,
+                "status": "completed",
             }
 
         return analysis

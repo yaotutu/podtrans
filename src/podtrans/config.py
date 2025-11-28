@@ -128,7 +128,7 @@ class Settings(BaseSettings):
         default="soulx-podcast",
         description="Conda environment name for SoulX CLI",
     )
-    
+
     # ===================================
     # Processing Configuration
     # ===================================
@@ -146,6 +146,38 @@ class Settings(BaseSettings):
             "Maximum number of segments per translation batch "
             "(even if tokens allow more). Recommended: 50-100 for stability."
         ),
+    )
+
+    # ===================================
+    # Voice Sample Extraction Configuration
+    # ===================================
+    voice_sample_extract_enabled: bool = Field(
+        default=True,
+        description="Whether to extract voice cloning samples during pipeline",
+    )
+    voice_sample_min_duration: float = Field(
+        default=5.0,
+        ge=1.0,
+        le=60.0,
+        description="Minimum voice sample duration in seconds (default: 5.0)",
+    )
+    voice_sample_max_duration: float = Field(
+        default=20.0,
+        ge=1.0,
+        le=60.0,
+        description="Maximum voice sample duration in seconds (default: 20.0)",
+    )
+    voice_sample_min_quality: float = Field(
+        default=60.0,
+        ge=0.0,
+        le=100.0,
+        description="Minimum voice sample quality score (0-100, default: 60.0)",
+    )
+    voice_sample_max_gap: float = Field(
+        default=2.0,
+        ge=0.1,
+        le=10.0,
+        description="Maximum gap between merged segments in seconds (default: 2.0)",
     )
     max_retries: int = Field(
         default=3,

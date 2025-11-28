@@ -43,7 +43,14 @@
       "Bash(conda info:*)",
       "Bash(xargs:*)",
       "Bash(chmod:*)",
-      "Bash(bash:*)"
+      "Bash(bash:*)",
+      "Bash(python3:*)",
+      "Bash(~/.local/share/uv/python/cpython-3.11.14-linux-x86_64-gnu/bin/python:*)",
+      "Bash(PYTHONPATH=src ~/.local/share/uv/python/cpython-3.11.14-linux-x86_64-gnu/bin/python:*)",
+      "Bash(lscpu:*)",
+      "Bash(ffmpeg:*)",
+      "Bash(ruff check:*)",
+      "Bash(ruff format:*)"
     ],
     "deny": [],
     "ask": []

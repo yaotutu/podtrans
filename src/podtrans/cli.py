@@ -13,6 +13,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 from podtrans.asr import WhisperXHandler
+from podtrans.asr.schemas import ASRResult
 from podtrans.config import get_settings
 from podtrans.models import PipelineMetadata, StageStatus
 from podtrans.translation import Translator
@@ -558,7 +559,9 @@ def synthesize(
         console.print(f"[green]✓[/green] Environment: {settings.soulx_conda_env}")
         console.print()
     except Exception as e:
-        console.print(f"[bold red]❌ Failed to initialize SoulX CLI client: {e}[/bold red]")
+        console.print(
+            f"[bold red]❌ Failed to initialize SoulX CLI client: {e}[/bold red]"
+        )
         logger.exception("TTS client initialization error")
         raise typer.Exit(1)
 
@@ -576,14 +579,22 @@ def synthesize(
     # Add speaker configurations to kwargs
     for config in speaker_configs:
         if config.voice_sample:
-            synthesize_kwargs[f"speaker_{config.speaker_id.split('_')[1]}_audio"] = config.voice_sample
+            synthesize_kwargs[f"speaker_{config.speaker_id.split('_')[1]}_audio"] = (
+                config.voice_sample
+            )
         if config.voice_description:
-            synthesize_kwargs[f"speaker_{config.speaker_id.split('_')[1]}_desc"] = config.voice_description
+            synthesize_kwargs[f"speaker_{config.speaker_id.split('_')[1]}_desc"] = (
+                config.voice_description
+            )
 
     # CLI backend - format conversion happens in synthesize method
     console.print("[bold cyan]🔄 Preparing synthesis parameters...[/bold cyan]")
-    console.print(f"[green]✓[/green] Translation segments: {len(translation_result.segments)}")
-    console.print(f"[green]✓[/green] Speakers: {len(set(s.speaker for s in translation_result.segments if s.speaker))}\n")
+    console.print(
+        f"[green]✓[/green] Translation segments: {len(translation_result.segments)}"
+    )
+    console.print(
+        f"[green]✓[/green] Speakers: {len(set(s.speaker for s in translation_result.segments if s.speaker))}\n"
+    )
 
     # Synthesize audio
     console.print("[bold cyan]🚀 Synthesizing audio...[/bold cyan]")
@@ -592,9 +603,7 @@ def synthesize(
     try:
         # CLI backend - pass translation result directly
         tts_result = tts_client.synthesize(
-            translation_result,
-            output_path,
-            **synthesize_kwargs
+            translation_result, output_path, **synthesize_kwargs
         )
 
         # Display summary
@@ -667,13 +676,37 @@ def pipeline(
         "--no-diarization",
         help="Disable speaker diarization",
     ),
+    no_voice_samples: bool = typer.Option(
+        False,
+        "--no-voice-samples",
+        help="Disable voice sample extraction",
+    ),
+    min_sample_duration: float | None = typer.Option(
+        None,
+        "--min-sample-duration",
+        help="Minimum voice sample duration in seconds (default: from config)",
+    ),
+    max_sample_duration: float | None = typer.Option(
+        None,
+        "--max-sample-duration",
+        help="Maximum voice sample duration in seconds (default: from config)",
+    ),
+    min_sample_quality: float | None = typer.Option(
+        None,
+        "--min-sample-quality",
+        help="Minimum voice sample quality score (0-100, default: from config)",
+    ),
 ) -> None:
-    """Run complete podcast translation pipeline (ASR → Translation → TTS).
+    """Run complete podcast translation pipeline (ASR → Voice Samples → Translation → TTS).
 
-    This command orchestrates all three stages in sequence:
+    This command orchestrates all stages in sequence:
     1. Transcribe audio with speaker diarization
-    2. Translate transcriptions to target language
-    3. Generate synthesized podcast audio
+    2. Extract voice cloning samples for each speaker (NEW!)
+    3. Translate transcriptions to target language
+    4. Generate synthesized podcast audio
+
+    Voice samples are extracted automatically and saved in voice_samples/ subdirectory.
+    Each speaker gets one high-quality sample optimized for voice cloning.
 
     This is the recommended way to process podcasts end-to-end.
 
@@ -682,7 +715,9 @@ def pipeline(
 
         podtrans pipeline podcast.mp3 -o ./results -l en -s en -t zh
 
-        podtrans pipeline episode.mp3 --no-diarization --source en --target zh
+        podtrans pipeline episode.mp3 --no-diarization --no-voice-samples
+
+        podtrans pipeline podcast.mp3 --min-sample-quality 75 --min-sample-duration 8
     """
     settings = get_settings()
 
@@ -727,6 +762,12 @@ def pipeline(
                 enable_diarization=not no_diarization,
                 source_lang=source_lang,
                 target_lang=target_lang,
+                extract_voice_samples=False
+                if no_voice_samples
+                else None,  # Use config default if not disabled
+                min_duration=min_sample_duration,
+                max_duration=max_sample_duration,
+                min_quality=min_sample_quality,
             )
         )
 
@@ -747,7 +788,7 @@ def pipeline(
                 StageStatus.SUCCESS: "✓",
                 StageStatus.FAILED: "✗",
                 StageStatus.RUNNING: "⏳",
-                StageStatus.PENDING: "⏸️"
+                StageStatus.PENDING: "⏸️",
             }.get(stage.status, "?")
 
             table.add_row(f"Stage: {stage.name}", f"{status_icon} {stage.status.value}")
@@ -755,6 +796,59 @@ def pipeline(
                 table.add_row(f"  Duration", f"{stage.duration_seconds:.2f}s")
 
         console.print(table)
+
+        # Display voice samples information
+        voice_samples_stage = pipeline_meta.get_stage("voice_samples")
+        if voice_samples_stage and voice_samples_stage.status == StageStatus.SUCCESS:
+            voice_samples_dir = output_dir / "voice_samples"
+            if voice_samples_dir.exists():
+                console.print("\n[bold]🎤 Voice Samples Extracted:[/bold]")
+
+                # Count samples
+                speaker_dirs = [
+                    d
+                    for d in voice_samples_dir.iterdir()
+                    if d.is_dir() and d.name.startswith("SPEAKER_")
+                ]
+
+                samples_table = Table(show_header=True, box=None)
+                samples_table.add_column("Speaker", style="cyan")
+                samples_table.add_column("Audio File", style="green")
+                samples_table.add_column("Duration", style="yellow")
+
+                for speaker_dir in sorted(speaker_dirs):
+                    audio_file = speaker_dir / "voice_sample.wav"
+                    metadata_file = speaker_dir / "voice_sample.txt"
+
+                    if audio_file.exists():
+                        # Try to get duration from the file
+                        try:
+                            size_mb = audio_file.stat().st_size / (1024 * 1024)
+                            duration_str = f"{size_mb:.1f} MB"
+
+                            # Try to extract duration from metadata file
+                            if metadata_file.exists():
+                                with open(metadata_file, "r", encoding="utf-8") as f:
+                                    content = f.read()
+                                    for line in content.split("\n"):
+                                        if "时长:" in line:
+                                            duration_str = line.split("时长:")[
+                                                1
+                                            ].strip()
+                                            break
+
+                            samples_table.add_row(
+                                speaker_dir.name, "voice_sample.wav", duration_str
+                            )
+                        except Exception:
+                            samples_table.add_row(
+                                speaker_dir.name, "voice_sample.wav", "N/A"
+                            )
+
+                console.print(samples_table)
+                console.print(
+                    f"[dim]Location: {voice_samples_dir.relative_to(Path.cwd())}[/dim]"
+                )
 
         # Display output files
         console.print("\n[bold]📁 Generated Files:[/bold]")
@@ -777,6 +871,232 @@ def pipeline(
     except Exception as e:
         console.print(f"\n[bold red]❌ Pipeline failed: {e}[/bold red]")
         logger.exception("Pipeline error")
+        raise typer.Exit(1)
+
+
+@app.command()
+def extract_samples(
+    audio_file: Path = typer.Argument(
+        ...,
+        exists=True,
+        help="Path to input audio file (mp3, wav, flac, m4a)",
+    ),
+    asr_result: Path = typer.Argument(
+        ...,
+        exists=True,
+        help="Path to ASR result JSON file",
+    ),
+    output_dir: Path = typer.Option(
+        Path("./voice_samples"),
+        "--output",
+        "-o",
+        help="Output directory for voice samples (default: ./voice_samples)",
+    ),
+    min_duration: float = typer.Option(
+        5.0,
+        "--min-duration",
+        help="Minimum sample duration in seconds (default: 5.0)",
+    ),
+    max_duration: float = typer.Option(
+        20.0,
+        "--max-duration",
+        help="Maximum sample duration in seconds (default: 20.0)",
+    ),
+    min_quality: float = typer.Option(
+        60.0,
+        "--min-quality",
+        help="Minimum quality score (0-100, default: 60.0)",
+    ),
+) -> None:
+    """Extract voice cloning samples from ASR results.
+
+    This command extracts the highest quality voice sample for each speaker
+    from ASR results, optimized for voice cloning applications.
+
+    For each speaker, it outputs:
+    - WAV audio file (5-20 seconds, highest quality sample)
+    - Detailed metadata text file with transcription and quality metrics
+
+    Output structure:
+        voice_samples/
+        ├── SPEAKER_00/
+        │   ├── voice_sample.wav    # Best audio sample
+        │   └── voice_sample.txt    # Detailed description
+        └── SPEAKER_01/
+            ├── voice_sample.wav
+            └── voice_sample.txt
+
+    Example:
+        podtrans extract-samples podcast.mp3 data/output/demo/asr_result.json
+
+        podtrans extract-samples podcast.mp3 asr_result.json -o my_samples --min-quality 75
+
+        podtrans extract-samples podcast.mp3 asr_result.json --min-duration 8 --max-duration 15
+    """
+    console.print("\n[bold blue]🎙️  PodTrans - Voice Sample Extraction[/bold blue]\n")
+    console.print(f"[dim]Audio file:[/dim] {audio_file}")
+    console.print(f"[dim]ASR result:[/dim] {asr_result}")
+    console.print(f"[dim]Output directory:[/dim] {output_dir}")
+    console.print(f"[dim]Duration range:[/dim] {min_duration}s - {max_duration}s")
+    console.print(f"[dim]Min quality score:[/dim] {min_quality}\n")
+
+    try:
+        # Validate audio file
+        if not validate_audio_file(audio_file):
+            console.print("[bold red]❌ Invalid audio file[/bold red]")
+            raise typer.Exit(1)
+
+        # Load ASR result
+        console.print("[dim]Loading ASR result...[/dim]")
+        try:
+            asr_data = read_json(asr_result)
+            asr_result_obj = ASRResult.model_validate(asr_data)
+        except Exception as e:
+            console.print(f"[bold red]❌ Failed to load ASR result: {e}[/bold red]")
+            raise typer.Exit(1)
+
+        console.print(
+            f"[green]✓[/green] ASR result loaded: {asr_result_obj.total_segments} segments, {asr_result_obj.speaker_count} speakers"
+        )
+
+        # Check if speaker diarization was performed
+        if asr_result_obj.speaker_count == 0:
+            console.print(
+                "[yellow]⚠️  No speaker diarization found in ASR result[/yellow]"
+            )
+            console.print(
+                "[yellow]   Voice samples will not be extracted without speaker labels[/yellow]"
+            )
+            raise typer.Exit(1)
+
+        # Initialize WhisperX handler
+        console.print("[dim]Initializing audio processor...[/dim]")
+        handler = WhisperXHandler()
+
+        # Extract voice samples
+        console.print("[dim]Extracting voice samples...[/dim]")
+        extraction_result = handler.extract_voice_samples(
+            audio_path=audio_file,
+            asr_result=asr_result_obj,
+            min_duration=min_duration,
+            max_duration=max_duration,
+            min_quality=min_quality,
+        )
+
+        # Display results
+        console.print("\n" + "=" * 60)
+        console.print("[bold green]✨ Voice Sample Extraction Complete![/bold green]\n")
+
+        # Summary table
+        table = Table(
+            title="Extraction Summary", show_header=True, header_style="bold cyan"
+        )
+        table.add_column("Metric", style="cyan")
+        table.add_column("Value", style="white")
+
+        table.add_row("Total Speakers", str(extraction_result.total_speakers))
+        table.add_row("Samples Extracted", str(extraction_result.total_samples))
+        table.add_row(
+            "Success Rate",
+            f"{extraction_result.extraction_summary['success_rate']:.1%}",
+        )
+        table.add_row(
+            "Average Quality",
+            f"{extraction_result.extraction_summary['average_quality']:.1f}/100",
+        )
+        table.add_row(
+            "Average Duration",
+            f"{extraction_result.extraction_summary['average_duration']:.1f}s",
+        )
+
+        console.print(table)
+
+        if extraction_result.speaker_samples:
+            console.print("\n[bold]Extracted Samples:[/bold]\n")
+
+            # Samples table
+            samples_table = Table(show_header=True, header_style="bold cyan")
+            samples_table.add_column("Speaker", style="cyan")
+            samples_table.add_column("Quality", style="green")
+            samples_table.add_column("Duration", style="yellow")
+            samples_table.add_column("Words", style="white")
+            samples_table.add_column("Recommendation", style="magenta")
+
+            for speaker_id, sample in extraction_result.speaker_samples.items():
+                quality_color = (
+                    "green"
+                    if sample.quality_score >= 80
+                    else "yellow"
+                    if sample.quality_score >= 60
+                    else "red"
+                )
+                samples_table.add_row(
+                    speaker_id,
+                    f"[{quality_color}]{sample.quality_score:.0f}/100[/{quality_color}]",
+                    f"{sample.duration:.1f}s",
+                    str(sample.words_count),
+                    sample.recommended_use[:30] + "..."
+                    if len(sample.recommended_use) > 30
+                    else sample.recommended_use,
+                )
+
+            console.print(samples_table)
+
+            console.print(f"\n[bold]Output Directory:[/bold] {output_dir.absolute()}")
+            console.print("[dim]Each speaker folder contains:[/dim]")
+            console.print("[dim]  • voice_sample.wav - Audio file[/dim]")
+            console.print("[dim]  • voice_sample.txt - Detailed metadata[/dim]")
+
+        else:
+            console.print("[yellow]⚠️  No voice samples extracted[/yellow]")
+            console.print(
+                "[yellow]   Try adjusting the quality thresholds or duration limits[/yellow]"
+            )
+
+        # Save extraction summary
+        summary_file = output_dir / "extraction_summary.json"
+        extraction_summary = {
+            "extraction_time": extraction_result.extraction_time.isoformat(),
+            "source_audio": str(audio_file),
+            "source_asr_result": str(asr_result),
+            "parameters": {
+                "min_duration": min_duration,
+                "max_duration": max_duration,
+                "min_quality": min_quality,
+            },
+            "summary": extraction_result.extraction_summary,
+            "samples": {
+                speaker_id: {
+                    "quality_score": sample.quality_score,
+                    "duration": sample.duration,
+                    "words_count": sample.words_count,
+                    "recommended_use": sample.recommended_use,
+                    "audio_path": str(sample.audio_path),
+                }
+                for speaker_id, sample in extraction_result.speaker_samples.items()
+            },
+        }
+
+        try:
+            write_json(extraction_summary, summary_file, indent=2)
+            console.print(
+                f"[green]✓[/green] Extraction summary saved to: {summary_file}"
+            )
+        except Exception as e:
+            console.print(f"[yellow]⚠️  Failed to save summary: {e}[/yellow]")
+
+        console.print("\n" + "=" * 60 + "\n")
+        console.print(
+            "[bold green]Voice samples are ready for cloning! 🎤[/bold green]"
+        )
+
+    except KeyboardInterrupt:
+        console.print("\n[yellow]⚠️  Extraction interrupted by user[/yellow]")
+        raise typer.Exit(1)
+
+    except Exception as e:
+        console.print(f"\n[bold red]❌ Voice sample extraction failed: {e}[/bold red]")
+        logger.exception("Voice sample extraction error")
         raise typer.Exit(1)
 
 

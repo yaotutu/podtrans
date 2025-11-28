@@ -10,6 +10,7 @@ import shutil
 import os
 from pathlib import Path
 from typing import Optional, Dict, Any
+
 try:
     import torch
 except ImportError:
@@ -21,13 +22,16 @@ from rich.console import Console
 
 console = Console()
 
+
 class SoulXCLIClient(TTSService):
     """SoulX-Podcast CLI client for local TTS generation"""
 
-    def __init__(self,
-                 cli_path: Optional[str] = None,
-                 conda_env: Optional[str] = None,
-                 use_conda_env: bool = True):
+    def __init__(
+        self,
+        cli_path: Optional[str] = None,
+        conda_env: Optional[str] = None,
+        use_conda_env: bool = True,
+    ):
         """
         Initialize SoulX CLI client
 
@@ -42,67 +46,28 @@ class SoulXCLIClient(TTSService):
         self.use_conda_env = use_conda_env
         self.temp_dir = None
 
-    def convert_format(self, translation_result, **kwargs) -> Dict[str, Any]:
-        """Convert TranslationResult to SoulX CLI format using default voice samples"""
-        # Use SoulX's default voice samples
-        soulx_project_path = "/home/yaotutu/SoulX-Podcast-main"
+    def convert_format(
+        self, translation_result, speaker_configs=None, **kwargs
+    ) -> Dict[str, Any]:
+        """Convert TranslationResult to SoulX CLI format using provided voice samples"""
+        from podtrans.tts.soulx.converter import SoulXConverter
 
-        # Default speakers with SoulX's voice samples
-        speakers = {
-            "S1": {
-                "prompt_audio": f"{soulx_project_path}/example/audios/female_mandarin.wav",
-                "prompt_text": "年轻女性，声音清脆，语调自然，富有表现力的播客主持人风格，声音温暖亲切，语速适中"
-            },
-            "S2": {
-                "prompt_audio": f"{soulx_project_path}/example/audios/male_mandarin.wav",
-                "prompt_text": "中年男性，声音低沉稳重，语速适中，富有磁性的播客嘉宾声音，充满智慧和经验"
-            }
-        }
+        # Always use our converter now
+        converter = SoulXConverter()
+        return converter.convert(translation_result, speaker_configs)
 
-        # Override with user-provided configurations if any
-        for key, value in kwargs.items():
-            if key.startswith('speaker_') and key.endswith('_audio'):
-                speaker_idx = key.split('_')[1]
-                speaker_key = f"S{int(speaker_idx) + 1}"
-                if speaker_key in speakers:
-                    speakers[speaker_key]["prompt_audio"] = str(value)
-            elif key.startswith('speaker_') and key.endswith('_desc'):
-                speaker_idx = key.split('_')[1]
-                speaker_key = f"S{int(speaker_idx) + 1}"
-                if speaker_key in speakers:
-                    speakers[speaker_key]["prompt_text"] = value
-
-        # Build text sequence with speaker mapping
-        text_sequence = []
-        for segment in translation_result.segments:
-            # Map speaker labels to SoulX's supported range (S1, S2)
-            # SoulX only supports 2 speakers, so we'll map multiple speakers to 2 voices
-            if segment.speaker and segment.speaker.startswith('SPEAKER_'):
-                speaker_num = int(segment.speaker.split('_')[1])
-                # Map to 2 speakers: even numbers -> S1, odd numbers -> S2
-                speaker_key = "S1" if speaker_num % 2 == 0 else "S2"
-            else:
-                speaker_key = "S1"  # Default to first speaker
-
-            text_sequence.append([speaker_key, segment.translated_text])
-
-        return {
-            "speakers": speakers,
-            "text": text_sequence
-        }
-
-    def synthesize(self, translation_result, output_path: Path, **kwargs) -> TTSResult:
+    def synthesize(self, script: dict, output_path: Path, **kwargs) -> TTSResult:
         """Synthesize speech using SoulX CLI"""
         try:
             # Create temporary directory for intermediate files
             self.temp_dir = tempfile.mkdtemp(prefix="soulx_cli_")
 
-            # Convert format
-            soulx_data = self.convert_format(translation_result, **kwargs)
+            # script is already converted to SoulX format
+            soulx_data = script
 
             # Write input JSON file
             input_file = Path(self.temp_dir) / "input.json"
-            with open(input_file, 'w', encoding='utf-8') as f:
+            with open(input_file, "w", encoding="utf-8") as f:
                 json.dump(soulx_data, f, ensure_ascii=False, indent=2)
 
             # Prepare CLI command
@@ -114,30 +79,38 @@ class SoulXCLIClient(TTSService):
                 cmd = self._build_direct_command(input_file, output_path, **kwargs)
 
             # Execute CLI command
-            console.print(f"[blue]Running SoulX CLI command:[/blue] {' '.join(cmd[:3])}...")
+            console.print(
+                f"[blue]Running SoulX CLI command:[/blue] {' '.join(cmd[:3])}..."
+            )
 
             result = subprocess.run(
                 cmd,
                 capture_output=True,
                 text=True,
-                timeout=kwargs.get("timeout", 1800),  # Increased to 30 minutes for long podcasts
-                env=self._get_env_vars()
+                timeout=kwargs.get(
+                    "timeout", 1800
+                ),  # Increased to 30 minutes for long podcasts
+                env=self._get_env_vars(),
             )
 
             if result.returncode != 0:
                 error_msg = result.stderr or result.stdout
-                raise RuntimeError(f"SoulX CLI failed with code {result.returncode}: {error_msg}")
+                raise RuntimeError(
+                    f"SoulX CLI failed with code {result.returncode}: {error_msg}"
+                )
 
             # Parse CLI output for metadata
             metadata = self._parse_cli_output(result.stdout)
 
-            console.print(f"[green]✓[/green] SoulX CLI synthesis completed successfully")
+            console.print(
+                f"[green]✓[/green] SoulX CLI synthesis completed successfully"
+            )
 
             return TTSResult(
                 audio_path=output_path,
                 duration=metadata.get("duration"),
                 service="soulx-cli",
-                segments_count=len(translation_result.segments)
+                segments_count=len(script.get("text", [])),
             )
 
         finally:
@@ -145,46 +118,56 @@ class SoulXCLIClient(TTSService):
             if self.temp_dir and Path(self.temp_dir).exists():
                 shutil.rmtree(self.temp_dir)
 
-    def _build_conda_command(self, input_file: Path, output_path: Path, **kwargs) -> list[str]:
+    def _build_conda_command(
+        self, input_file: Path, output_path: Path, **kwargs
+    ) -> list[str]:
         """Build command with conda environment activation for SoulX-Podcast"""
         settings = get_settings()
 
         # Find the model path (look for pretrained_models directory)
         model_path = kwargs.get("model", settings.soulx_cli_model)
-        if not model_path.startswith('/'):
+        if not model_path.startswith("/"):
             # Use relative path to SoulX project
-            model_path = f"/home/yaotutu/SoulX-Podcast-main/pretrained_models/{model_path}"
+            model_path = (
+                f"/home/yaotutu/SoulX-Podcast-main/pretrained_models/{model_path}"
+            )
 
         cmd = [
-            'bash', '-c',
-            f'source ~/miniconda3/etc/profile.d/conda.sh && '
-            f'conda activate {self.conda_env} && '
-            f'cd /home/yaotutu/SoulX-Podcast-main && '
-            f'export PYTHONPATH=/home/yaotutu/SoulX-Podcast-main:$PYTHONPATH && '
-            f'python cli/podcast.py '
-            f'--json_path {input_file} '
-            f'--model_path {model_path} '
-            f'--output_path {output_path} '
-            f'--llm_engine hf '
-            f'--seed 1988'
+            "bash",
+            "-c",
+            f"source ~/miniconda3/etc/profile.d/conda.sh && "
+            f"conda activate {self.conda_env} && "
+            f"cd /home/yaotutu/SoulX-Podcast-main && "
+            f"export PYTHONPATH=/home/yaotutu/SoulX-Podcast-main:$PYTHONPATH && "
+            f"python cli/podcast.py "
+            f"--json_path {input_file} "
+            f"--model_path {model_path} "
+            f"--output_path {output_path} "
+            f"--llm_engine hf "
+            f"--seed 1988",
         ]
 
         # Add FP16 for GPU acceleration if available
         if torch and torch.cuda.is_available():
-            cmd[-1] += ' --fp16_flow'
+            cmd[-1] += " --fp16_flow"
 
         return cmd
 
-    def _build_direct_command(self, input_file: Path, output_path: Path, **kwargs) -> list[str]:
+    def _build_direct_command(
+        self, input_file: Path, output_path: Path, **kwargs
+    ) -> list[str]:
         """Build direct CLI command (no conda activation)"""
         settings = get_settings()
 
         cmd = [
             self.cli_path,
             "generate",
-            "--input", str(input_file),
-            "--output", str(output_path),
-            "--model", kwargs.get("model", settings.soulx_cli_model)
+            "--input",
+            str(input_file),
+            "--output",
+            str(output_path),
+            "--model",
+            kwargs.get("model", settings.soulx_cli_model),
         ]
 
         # Add optional parameters
@@ -200,8 +183,8 @@ class SoulXCLIClient(TTSService):
         env = os.environ.copy()
 
         # Preserve CUDA environment if using GPU
-        if os.environ.get('CUDA_VISIBLE_DEVICES'):
-            env['CUDA_VISIBLE_DEVICES'] = os.environ['CUDA_VISIBLE_DEVICES']
+        if os.environ.get("CUDA_VISIBLE_DEVICES"):
+            env["CUDA_VISIBLE_DEVICES"] = os.environ["CUDA_VISIBLE_DEVICES"]
 
         return env
 
@@ -210,18 +193,19 @@ class SoulXCLIClient(TTSService):
         metadata = {}
         try:
             # Try to parse JSON output if available
-            if cli_output.strip().startswith('{'):
+            if cli_output.strip().startswith("{"):
                 return json.loads(cli_output)
 
             # Parse duration from CLI output
-            for line in cli_output.strip().split('\n'):
+            for line in cli_output.strip().split("\n"):
                 line = line.lower()
-                if 'duration' in line or 'time' in line:
+                if "duration" in line or "time" in line:
                     # Extract numeric value from lines like "Duration: 5.23s"
                     import re
-                    match = re.search(r'(\d+\.?\d*)', line)
+
+                    match = re.search(r"(\d+\.?\d*)", line)
                     if match:
-                        metadata['duration'] = float(match.group(1))
+                        metadata["duration"] = float(match.group(1))
                         break
 
         except Exception as e:

@@ -77,14 +77,10 @@ class Word(BaseModel):
     start: float = Field(ge=0, description="开始时间（秒）")
     end: float = Field(ge=0, description="结束时间（秒）")
     score: float | None = Field(
-        None,
-        ge=0,
-        le=1,
-        description="置信度分数 (0.0-1.0)，None 表示未提供"
+        None, ge=0, le=1, description="置信度分数 (0.0-1.0)，None 表示未提供"
     )
     speaker: str | None = Field(
-        None,
-        description="说话人标签 (例如 'SPEAKER_00')，None 表示未识别"
+        None, description="说话人标签 (例如 'SPEAKER_00')，None 表示未识别"
     )
 
     model_config = {
@@ -130,12 +126,10 @@ class Segment(BaseModel):
     end: float = Field(ge=0, description="结束时间（秒）")
     text: str = Field(description="转录的完整文本")
     speaker: str | None = Field(
-        None,
-        description="说话人标签 (例如 'SPEAKER_00')，None 表示未识别"
+        None, description="说话人标签 (例如 'SPEAKER_00')，None 表示未识别"
     )
     words: list[Word] = Field(
-        default_factory=list,
-        description="词级时间戳列表，空列表表示无词级信息"
+        default_factory=list, description="词级时间戳列表，空列表表示无词级信息"
     )
 
     model_config = {
@@ -227,10 +221,7 @@ class ASRResult(BaseModel):
     language: str = Field(
         description="检测到的语言代码 (例如 'en', 'zh'，遵循 ISO 639-1)"
     )
-    audio_duration: float = Field(
-        ge=0,
-        description="音频总时长（秒）"
-    )
+    audio_duration: float = Field(ge=0, description="音频总时长（秒）")
     model_name: str = Field(
         description="使用的 ASR 模型名称 (例如 'medium', 'large-v2')"
     )

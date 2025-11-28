@@ -138,7 +138,9 @@ def calculate_quality_metrics(
 
     # Speaker metrics
     speaker_count = result.speaker_count
-    segments_with_speakers = sum(1 for seg in result.segments if seg.speaker is not None)
+    segments_with_speakers = sum(
+        1 for seg in result.segments if seg.speaker is not None
+    )
     speaker_consistency = segments_with_speakers / total_segments
 
     # Anomaly detection
@@ -208,9 +210,7 @@ def validate_translation_result(result: TranslationResult) -> list[str]:
         )
 
     # Check for error markers
-    error_count = sum(
-        1 for seg in result.segments if "[ERROR]" in seg.translated_text
-    )
+    error_count = sum(1 for seg in result.segments if "[ERROR]" in seg.translated_text)
     if error_count > 0:
         issues.append(
             f"Contains {error_count} error segments "
@@ -284,7 +284,7 @@ def generate_quality_report(
 
 - **Quality Score**: {metrics.overall_score:.1f}/100
 - **Grade**: {metrics.grade}
-- **Status**: {'✅ Pass' if metrics.overall_score >= 70 else '⚠️ Needs Review' if metrics.overall_score >= 50 else '❌ Fail'}
+- **Status**: {"✅ Pass" if metrics.overall_score >= 70 else "⚠️ Needs Review" if metrics.overall_score >= 50 else "❌ Fail"}
 
 ## Metrics Summary
 
@@ -344,7 +344,9 @@ def generate_quality_report(
         report += "- ⚠️ Fix error segments\n"
 
     if metrics.retry_rate > 0.1:
-        report += "- 💡 High retry rate. Consider smaller batch sizes or better prompts.\n"
+        report += (
+            "- 💡 High retry rate. Consider smaller batch sizes or better prompts.\n"
+        )
 
     if metrics.length_anomalies:
         report += f"- 💡 {len(metrics.length_anomalies)} length anomalies detected. Manual review recommended.\n"

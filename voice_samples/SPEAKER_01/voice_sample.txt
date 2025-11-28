@@ -1,0 +1,39 @@
+【音频信息】
+文件名: voice_sample.wav
+时长: 7.6秒
+采样率: 22050Hz
+格式: WAV
+
+【文本内容】
+Think of it like podcast, commentary, but, you know, often way more involved, maybe more intimate, sometimes even like a whole show after the show kind of thing.
+
+【时间信息】
+开始时间: 16.4秒
+结束时间: 24.0秒
+持续时间: 7.6秒
+
+【语音特征】
+说话人: SPEAKER_01
+语速: 3.7词/秒 (适中)
+词数: 28个词
+音素覆盖率: 84.6%
+
+【质量指标】
+连续性: 完整句子 (无中断)
+清晰度: 高 (基于ASR置信度)
+情感状态: 中性客观
+推荐指数: 88/100
+
+【克隆建议】
+推荐使用：高质量的克隆样本，适合作为主要训练素材
+
+【提取信息】
+提取时间: 2025-11-28 12:44:10
+质量评分详情:
+- 时长适宜性: 25分 (5-20秒最佳)
+- 语速自然度: 20分 (2.5-4.0词/秒最佳)
+- 内容完整性: 30分 (完整句子加分)
+- 音素丰富度: 25分 (发音多样性)
+
+【关键词】
+like, more, show, think, it, podcast, commentary, you

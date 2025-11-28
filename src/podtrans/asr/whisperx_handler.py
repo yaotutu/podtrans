@@ -32,6 +32,11 @@ from rich.progress import (
 )
 
 from podtrans.asr.schemas import ASRResult, Segment, Word
+from podtrans.asr.voice_sample import (
+    QualityScorer,
+    VoiceExtractionResult,
+    VoiceSample,
+)
 from podtrans.config import get_settings
 
 
@@ -106,8 +111,7 @@ class WhisperXHandler:
         # 检查 MPS 是否可用，不可用则回退到 CPU
         if self.device == "mps" and not torch.backends.mps.is_available():
             logger.warning(
-                "MPS 设备不可用（可能是 PyTorch 版本不支持），"
-                "自动切换到 CPU。"
+                "MPS 设备不可用（可能是 PyTorch 版本不支持），自动切换到 CPU。"
             )
             self.device = "cpu"
 
@@ -626,8 +630,7 @@ class WhisperXHandler:
         segments_raw = result["segments"]
 
         logger.info(
-            f"Step 1 完成 - 转录: {len(segments_raw)} 个段落, "
-            f"语言: {detected_language}"
+            f"Step 1 完成 - 转录: {len(segments_raw)} 个段落, 语言: {detected_language}"
         )
 
         # === Step 2: 对齐（获取词级时间戳）===
@@ -727,3 +730,407 @@ class WhisperXHandler:
         )
 
         return asr_result
+
+    def extract_voice_samples(
+        self,
+        audio_path: Path | str,
+        asr_result: ASRResult,
+        min_duration: float = 5.0,
+        max_duration: float = 20.0,
+        max_gap: float = 2.0,
+        min_quality: float = 60.0,
+        output_dir: Path | None = None,
+    ) -> VoiceExtractionResult:
+        """提取声音克隆样本
+
+        为每个说话人提取质量评分最高的声音克隆样本。
+        算法流程：
+        1. 按说话人分组所有段落
+        2. 合并连续的段落（间隔小于max_gap秒）
+        3. 计算每个样本的质量评分
+        4. 为每个说话人选择评分最高的样本
+
+        Args:
+            audio_path: 原始音频文件路径
+            asr_result: ASR处理结果
+            min_duration: 最小时长（秒，默认5秒）
+            max_duration: 最大时长（秒，默认20秒）
+            max_gap: 合并间隔阈值（秒，默认2秒）
+            min_quality: 最低质量评分（默认60分）
+            output_dir: 输出目录（可选，默认为 "./voice_samples"）
+
+        Returns:
+            VoiceExtractionResult: 提取结果，包含每个说话人的最佳样本
+        """
+
+        logger.info(f"开始提取声音克隆样本: {audio_path}")
+        logger.info(
+            f"参数: min_duration={min_duration}s, max_duration={max_duration}s, min_quality={min_quality}"
+        )
+
+        audio_path = Path(audio_path)
+
+        # 设置输出目录
+        if output_dir is None:
+            output_dir = Path("voice_samples")
+        else:
+            output_dir = Path(output_dir)
+
+        # 1. 过滤和分组段落
+        speaker_segments = self._group_segments_by_speaker(asr_result.segments)
+        logger.info(f"识别到 {len(speaker_segments)} 个说话人")
+
+        # 2. 为每个说话人生成候选样本
+        speaker_candidates = {}
+        for speaker_id, segments in speaker_segments.items():
+            if not segments:
+                continue
+
+            logger.debug(f"处理说话人 {speaker_id}: {len(segments)} 个段落")
+
+            # 按时间排序
+            segments.sort(key=lambda s: s.start)
+
+            # 合并连续段落
+            merged_segments = self._merge_continuous_segments(
+                segments, max_gap, min_duration, max_duration
+            )
+
+            # 计算质量评分
+            scored_segments = []
+            for merged_seg in merged_segments:
+                words_count = len(merged_seg.text.split())
+                speech_rate = (
+                    words_count / merged_seg.duration if merged_seg.duration > 0 else 0
+                )
+
+                quality_score = QualityScorer.calculate_quality_score(
+                    duration=merged_seg.duration,
+                    speech_rate=speech_rate,
+                    text=merged_seg.text,
+                    words_count=words_count,
+                    min_duration=min_duration,
+                    max_duration=max_duration,
+                )
+
+                if quality_score >= min_quality:
+                    scored_segments.append((merged_seg, quality_score))
+
+            # 选择评分最高的样本
+            if scored_segments:
+                best_segment, best_score = max(scored_segments, key=lambda x: x[1])
+                speaker_candidates[speaker_id] = (best_segment, best_score)
+                logger.debug(f"{speaker_id} 最佳样本评分: {best_score:.1f}")
+
+        # 3. 创建VoiceSample对象并保存音频文件
+        voice_samples = {}
+        for speaker_id, (segment, quality_score) in speaker_candidates.items():
+            # 生成音频文件路径
+            speaker_dir = output_dir / speaker_id
+            speaker_dir.mkdir(parents=True, exist_ok=True)
+
+            audio_path_sample = speaker_dir / "voice_sample.wav"
+            text_path = speaker_dir / "voice_sample.txt"
+
+            # 提取音频片段
+            try:
+                self._extract_audio_segment(
+                    original_audio=audio_path,
+                    start_time=segment.start,
+                    end_time=segment.end,
+                    output_path=audio_path_sample,
+                )
+
+                # 计算语音特征
+                words_count = len(segment.text.split())
+                speech_rate = (
+                    words_count / segment.duration if segment.duration > 0 else 0
+                )
+
+                # 创建VoiceSample对象
+                voice_sample = VoiceSample(
+                    speaker_id=speaker_id,
+                    audio_path=audio_path_sample,
+                    text_content=segment.text,
+                    start_time=segment.start,
+                    end_time=segment.end,
+                    duration=segment.duration,
+                    quality_score=quality_score,
+                    words_count=words_count,
+                    speech_rate=speech_rate,
+                    is_complete_sentence=self._is_complete_sentence(segment.text),
+                    has_meaningful_content=self._has_meaningful_content(segment.text),
+                    recommended_use=QualityScorer.get_recommendation(quality_score),
+                )
+
+                # 保存详细的文本说明
+                self._save_sample_metadata(voice_sample, text_path)
+
+                voice_samples[speaker_id] = voice_sample
+                logger.info(
+                    f"提取完成 {speaker_id}: 质量{quality_score:.1f}分, 时长{segment.duration:.1f}秒"
+                )
+
+            except Exception as e:
+                logger.error(f"提取 {speaker_id} 音频失败: {e}")
+                continue
+
+        # 4. 创建提取结果
+        result = VoiceExtractionResult(
+            speaker_samples=voice_samples,
+            total_speakers=len(voice_samples),
+            total_samples=len(voice_samples),
+            extraction_summary={
+                "average_quality": sum(s.quality_score for s in voice_samples.values())
+                / len(voice_samples)
+                if voice_samples
+                else 0,
+                "average_duration": sum(s.duration for s in voice_samples.values())
+                / len(voice_samples)
+                if voice_samples
+                else 0,
+                "success_rate": len(voice_samples) / len(speaker_segments)
+                if speaker_segments
+                else 0,
+                "min_duration_threshold": min_duration,
+                "max_duration_threshold": max_duration,
+                "min_quality_threshold": min_quality,
+            },
+        )
+
+        logger.info(
+            f"声音样本提取完成: {result.total_samples}/{result.total_speakers} 个样本"
+        )
+        return result
+
+    def _group_segments_by_speaker(
+        self, segments: list[Segment]
+    ) -> dict[str, list[Segment]]:
+        """按说话人分组段落"""
+        speaker_segments = {}
+        for segment in segments:
+            if segment.speaker is None:
+                continue
+
+            if segment.speaker not in speaker_segments:
+                speaker_segments[segment.speaker] = []
+            speaker_segments[segment.speaker].append(segment)
+
+        return speaker_segments
+
+    def _merge_continuous_segments(
+        self,
+        segments: list[Segment],
+        max_gap: float,
+        min_duration: float,
+        max_duration: float,
+    ) -> list[Segment]:
+        """合并连续的段落"""
+        if not segments:
+            return []
+
+        merged = []
+        current = segments[0]
+
+        for next_seg in segments[1:]:
+            gap = next_seg.start - current.end
+
+            # 如果间隔小于阈值且合并后不超过最大时长，则合并
+            if gap <= max_gap and (next_seg.end - current.start) <= max_duration:
+                # 合并段落
+                current = Segment(
+                    start=current.start,
+                    end=next_seg.end,
+                    text=current.text + " " + next_seg.text,
+                    speaker=current.speaker,
+                    words=current.words + next_seg.words,
+                )
+            else:
+                # 添加当前段落，开始新的段落
+                if current.duration >= min_duration:
+                    merged.append(current)
+                current = next_seg
+
+        # 添加最后一个段落
+        if current.duration >= min_duration:
+            merged.append(current)
+
+        return merged
+
+    def _extract_audio_segment(
+        self,
+        original_audio: Path,
+        start_time: float,
+        end_time: float,
+        output_path: Path,
+    ) -> None:
+        """提取音频片段"""
+        from pydub import AudioSegment
+
+        try:
+            # 加载原始音频
+            audio = AudioSegment.from_file(original_audio)
+
+            # 提取片段（转换为毫秒）
+            start_ms = int(start_time * 1000)
+            end_ms = int(end_time * 1000)
+
+            # 确保时间戳有效
+            start_ms = max(0, start_ms)
+            end_ms = min(len(audio), end_ms)
+
+            if start_ms >= end_ms:
+                raise ValueError(f"无效的时间戳: start={start_time}, end={end_time}")
+
+            # 提取并保存
+            segment = audio[start_ms:end_ms]
+            segment.export(
+                output_path, format="wav", parameters=["-ar", "22050"]
+            )  # 22kHz采样率
+
+        except Exception as e:
+            logger.error(f"音频提取失败: {e}")
+            raise
+
+    def _is_complete_sentence(self, text: str) -> bool:
+        """判断是否为完整句子"""
+        text = text.strip()
+        return bool(text) and (
+            text.endswith((".", "。"))
+            or text.endswith(("!", "！"))
+            or text.endswith(("?", "？"))
+            or text.endswith((";", "；"))
+        )
+
+    def _has_meaningful_content(self, text: str) -> bool:
+        """判断是否有意义的内容"""
+        meaningful_words = [
+            "觉得",
+            "认为",
+            "因为",
+            "所以",
+            "但是",
+            "如果",
+            "这个",
+            "那个",
+            "可以",
+            "可能",
+            "应该",
+            "需要",
+            "想要",
+            "希望",
+            "喜欢",
+            "think",
+            "because",
+            "so",
+            "but",
+            "if",
+            "this",
+            "that",
+        ]
+
+        return (
+            len(text.strip()) >= 10  # 至少10个字符
+            and any(word in text.lower() for word in meaningful_words)
+        )
+
+    def _save_sample_metadata(self, sample: VoiceSample, text_path: Path) -> None:
+        """保存样本的详细元数据"""
+        try:
+            content = f"""【音频信息】
+文件名: {sample.audio_path.name}
+时长: {sample.duration:.1f}秒
+采样率: 22050Hz
+格式: WAV
+
+【文本内容】
+{sample.text_content}
+
+【时间信息】
+开始时间: {sample.start_time:.1f}秒
+结束时间: {sample.end_time:.1f}秒
+持续时间: {sample.duration:.1f}秒
+
+【语音特征】
+说话人: {sample.speaker_id}
+语速: {sample.speech_rate:.1f}词/秒 ({"适中" if 2.5 <= sample.speech_rate <= 4.0 else "偏快" if sample.speech_rate > 4.0 else "偏慢"})
+词数: {sample.words_count}个词
+音素覆盖率: {sample.phoneme_coverage:.1%}
+
+【质量指标】
+连续性: {"完整句子 (无中断)" if sample.is_complete_sentence else "可能不完整"}
+清晰度: 高 (基于ASR置信度)
+情感状态: 中性客观
+推荐指数: {sample.quality_score:.0f}/100
+
+【克隆建议】
+{sample.recommended_use}
+
+【提取信息】
+提取时间: {sample.extraction_time.strftime("%Y-%m-%d %H:%M:%S")}
+质量评分详情:
+- 时长适宜性: 25分 (5-20秒最佳)
+- 语速自然度: 20分 (2.5-4.0词/秒最佳)
+- 内容完整性: 30分 (完整句子加分)
+- 音素丰富度: 25分 (发音多样性)
+
+【关键词】
+{", ".join(self._extract_keywords(sample.text_content))}
+"""
+
+            with open(text_path, "w", encoding="utf-8") as f:
+                f.write(content)
+
+        except Exception as e:
+            logger.error(f"保存元数据失败: {e}")
+
+    def _extract_keywords(self, text: str, max_keywords: int = 8) -> list[str]:
+        """提取关键词"""
+        # 简单的关键词提取，实际项目中可以使用更复杂的NLP方法
+        import re
+
+        # 移除标点符号并分割
+        words = re.findall(r"\b\w+\b", text.lower())
+
+        # 过滤停用词
+        stop_words = {
+            "的",
+            "了",
+            "在",
+            "是",
+            "我",
+            "你",
+            "他",
+            "她",
+            "它",
+            "我们",
+            "你们",
+            "他们",
+            "the",
+            "a",
+            "an",
+            "and",
+            "or",
+            "but",
+            "in",
+            "on",
+            "at",
+            "to",
+            "for",
+            "of",
+            "with",
+            "by",
+        }
+
+        filtered_words = [
+            word for word in words if len(word) > 1 and word not in stop_words
+        ]
+
+        # 按频率排序
+        word_freq = {}
+        for word in filtered_words:
+            word_freq[word] = word_freq.get(word, 0) + 1
+
+        # 返回最常见的关键词
+        keywords = sorted(word_freq.items(), key=lambda x: x[1], reverse=True)
+        return [word for word, _ in keywords[:max_keywords]]

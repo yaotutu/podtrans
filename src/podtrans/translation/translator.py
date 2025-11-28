@@ -300,9 +300,7 @@ class Translator:
 
         # Cache newly translated segments
         if self.enable_cache and self.cache and newly_translated:
-            self.cache.set_batch(
-                newly_translated, source_lang, target_lang, self.model
-            )
+            self.cache.set_batch(newly_translated, source_lang, target_lang, self.model)
             logger.debug(f"Cached {len(newly_translated)} new translations")
 
         # Merge cached and newly translated results
