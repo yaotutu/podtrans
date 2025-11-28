@@ -87,6 +87,100 @@ uv run python scripts/convert_to_soulx.py
 
 ---
 
+### 模型管理 🆕
+
+#### `check_models.py`
+检查所有 ASR 模型是否已下载到本地缓存。
+
+**用法**:
+```bash
+uv run python scripts/check_models.py
+```
+
+**功能**:
+- ✅ 检查 Whisper 模型 (所有尺寸)
+- ✅ 检查 wav2vec2 对齐模型
+- ✅ 检查说话人分离模型 (pyannote, speechbrain, silero-vad)
+- ✅ 显示缓存大小
+- ✅ 统计总缓存占用
+
+**输出示例**:
+```
+🔍 PodTrans 模型下载检查
+
+============================================================
+
+📦 Whisper 模型:
+  tiny         ❌ 未找到
+  base         ✅ 141.0 MB
+  small        ❌ 未找到
+  medium       ✅ 1.4 GB
+  large-v2     ✅ 2.8 GB
+  large-v3     ❌ 未找到
+
+📦 wav2vec2 对齐模型:
+  wav2vec2:    ✅ 已下载 (360 MB)
+
+📦 说话人分离模型:
+  speechbrain              ✅ 85.0 MB
+  pyannote-diarization     ✅ 50.0 MB
+  pyannote-segmentation    ✅ 20.0 MB
+  silero-vad               ✅ 31.0 MB
+
+============================================================
+📊 HuggingFace 缓存总计: ✅ 4.5 GB
+📊 PyTorch 缓存总计:     ✅ 422.0 MB
+============================================================
+```
+
+**使用场景**:
+1. **首次安装后检查**: 确认所有模型是否已下载
+2. **故障排查**: 检查模型缺失或损坏
+3. **清理缓存前**: 查看哪些模型可以删除
+4. **磁盘空间管理**: 了解模型占用空间
+
+---
+
+#### `preload_models.py`
+预下载 Whisper 模型到本地缓存。
+
+**用法**:
+```bash
+uv run python scripts/preload_models.py
+```
+
+**功能**:
+- ✅ 根据 .env 配置下载 Whisper 模型
+- ✅ 显示下载进度
+- ✅ 提示其他模型的下载方式
+
+**输出示例**:
+```
+🎯 开始预下载 ASR 模型...
+📦 Whisper 模型: medium
+💾 设备: cpu
+🔧 计算类型: int8
+
+1️⃣ 下载 Whisper 模型...
+Downloading: 100%|██████████| 1.4G/1.4G [03:45<00:00, 6.2MB/s]
+✅ Whisper 模型下载完成!
+
+2️⃣ wav2vec2 对齐模型会在首次运行 align() 时自动下载
+3️⃣ 说话人分离模型会在首次运行 diarize() 时自动下载 (需要 HF_TOKEN)
+
+🎉 主要模型预下载完成!
+💡 提示: 运行一次 `podtrans transcribe` 命令会自动下载所有剩余模型
+```
+
+**使用场景**:
+1. **新环境初始化**: 提前下载模型避免首次运行等待
+2. **离线部署准备**: 在有网络时预下载所有模型
+3. **模型缓存预热**: 加速首次使用体验
+
+**相关文档**: 参见 [docs/MODEL_DOWNLOAD_GUIDE.md](../docs/MODEL_DOWNLOAD_GUIDE.md)
+
+---
+
 ### 测试和验证
 
 #### `compare_models.py` 🆕⭐

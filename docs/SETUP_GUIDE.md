@@ -174,6 +174,56 @@ uv run python -c "from podtrans.config import get_settings; s=get_settings(); pr
 
 ---
 
+### Step 6: 预下载模型 (可选但推荐)
+
+首次运行会自动下载约 1.9 GB 的模型,建议提前下载以避免使用时等待。
+
+**详细模型下载指南**: 参见 [MODEL_DOWNLOAD_GUIDE.md](MODEL_DOWNLOAD_GUIDE.md)
+
+**快速预下载**:
+
+```bash
+# 方法 1: 使用预下载脚本 (只下载 Whisper 模型)
+uv run python scripts/preload_models.py
+
+# 方法 2: 运行一次完整流程 (下载所有模型,推荐)
+# 准备一个 30-60 秒的测试音频文件
+uv run podtrans transcribe data/input/test.mp3
+```
+
+**检查模型下载状态**:
+
+```bash
+# 检查所有模型是否已下载
+uv run python scripts/check_models.py
+```
+
+**预期输出**:
+```
+🔍 PodTrans 模型下载检查
+
+============================================================
+
+📦 Whisper 模型:
+  medium       ✅ 1.4 GB
+
+📦 wav2vec2 对齐模型:
+  wav2vec2:    ✅ 已下载 (360 MB)
+
+📦 说话人分离模型:
+  speechbrain              ✅ 85 MB
+  pyannote-diarization     ✅ 50 MB
+  pyannote-segmentation    ✅ 20 MB
+  silero-vad               ✅ 31 MB
+
+============================================================
+📊 HuggingFace 缓存总计: ✅ 1.5 GB
+📊 PyTorch 缓存总计:     ✅ 422 MB
+============================================================
+```
+
+---
+
 ## 🎯 快速测试 (验证一切正常)
 
 ### 准备测试音频
