@@ -91,6 +91,10 @@ class Settings(BaseSettings):
         le=200000,
         description="Maximum tokens per translation batch (default: 120k for 128k context models)",
     )
+    translation_use_json_mode: bool = Field(
+        default=False,
+        description="Use JSON mode for translation API (experimental)",
+    )
 
     # ===================================
     # TTS Configuration
