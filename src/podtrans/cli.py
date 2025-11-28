@@ -4,6 +4,7 @@ This module provides the CLI commands using Typer.
 """
 
 from pathlib import Path
+import asyncio
 
 import typer
 from loguru import logger
@@ -20,6 +21,7 @@ from podtrans.tts.factory import create_tts_service
 from podtrans.tts.schemas import SpeakerConfig
 from podtrans.utils.audio import get_audio_duration, validate_audio_file
 from podtrans.utils.file import read_json, write_json
+from podtrans.pipeline.orchestrator import PipelineOrchestrator
 
 app = typer.Typer(
     name="podtrans",
@@ -626,6 +628,155 @@ def synthesize(
     except Exception as e:
         console.print(f"\n[bold red]❌ Synthesis failed: {e}[/bold red]")
         logger.exception("TTS synthesis error")
+        raise typer.Exit(1)
+
+
+@app.command()
+def pipeline(
+    audio: Path = typer.Argument(
+        ...,
+        exists=True,
+        help="Path to audio file (mp3, wav, flac, m4a)",
+    ),
+    output: Path | None = typer.Option(
+        None,
+        "--output",
+        "-o",
+        help="Output directory (default: data/output/{audio_name})",
+    ),
+    language: str | None = typer.Option(
+        None,
+        "--language",
+        "-l",
+        help="Language code for ASR (e.g., 'en', 'zh'). Auto-detect if not specified",
+    ),
+    source_lang: str = typer.Option(
+        "en",
+        "--source",
+        "-s",
+        help="Source language for translation",
+    ),
+    target_lang: str = typer.Option(
+        "zh",
+        "--target",
+        "-t",
+        help="Target language for translation",
+    ),
+    no_diarization: bool = typer.Option(
+        False,
+        "--no-diarization",
+        help="Disable speaker diarization",
+    ),
+) -> None:
+    """Run complete podcast translation pipeline (ASR → Translation → TTS).
+
+    This command orchestrates all three stages in sequence:
+    1. Transcribe audio with speaker diarization
+    2. Translate transcriptions to target language
+    3. Generate synthesized podcast audio
+
+    This is the recommended way to process podcasts end-to-end.
+
+    Example:
+        podtrans pipeline data/input/demo.mp3
+
+        podtrans pipeline podcast.mp3 -o ./results -l en -s en -t zh
+
+        podtrans pipeline episode.mp3 --no-diarization --source en --target zh
+    """
+    settings = get_settings()
+
+    # Validate audio file
+    console.print("\n[bold blue]🎙️  PodTrans - Complete Pipeline[/bold blue]\n")
+    console.print(f"[dim]Audio file:[/dim] {audio}")
+
+    if not validate_audio_file(audio):
+        console.print("[bold red]❌ Invalid audio file[/bold red]")
+        raise typer.Exit(1)
+
+    # Get audio info
+    try:
+        duration = get_audio_duration(audio)
+        duration_min = duration / 60
+        console.print(
+            f"[dim]Duration:[/dim] {duration:.2f} seconds ({duration_min:.2f} minutes)"
+        )
+    except Exception as e:
+        console.print(f"[yellow]⚠️  Could not get audio duration: {e}[/yellow]")
+        duration = 0
+
+    # Determine output directory
+    if output is None:
+        audio_name = audio.stem
+        output_dir = settings.output_dir / audio_name
+    else:
+        output_dir = Path(output)
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    console.print(f"[dim]Output directory:[/dim] {output_dir}\n")
+
+    # Create and run Pipeline orchestrator
+    console.print("[bold cyan]🔄 Starting complete pipeline...[/bold cyan]\n")
+
+    try:
+        orchestrator = PipelineOrchestrator(output_dir)
+        pipeline_meta = asyncio.run(
+            orchestrator.run_pipeline(
+                audio_path=audio,
+                language=language,
+                enable_diarization=not no_diarization,
+                source_lang=source_lang,
+                target_lang=target_lang,
+            )
+        )
+
+        # Display final results
+        console.print("\n" + "=" * 60)
+        console.print("[bold green]✨ Pipeline Complete![/bold green]\n")
+
+        table = Table(show_header=False, box=None)
+        table.add_column("Key", style="cyan")
+        table.add_column("Value", style="white")
+
+        table.add_row("Total Duration", f"{pipeline_meta.total_duration_seconds:.2f}s")
+        table.add_row("Final Status", pipeline_meta.final_status.value)
+
+        # Display stage status
+        for stage in pipeline_meta.stages:
+            status_icon = {
+                StageStatus.SUCCESS: "✓",
+                StageStatus.FAILED: "✗",
+                StageStatus.RUNNING: "⏳",
+                StageStatus.PENDING: "⏸️"
+            }.get(stage.status, "?")
+
+            table.add_row(f"Stage: {stage.name}", f"{status_icon} {stage.status.value}")
+            if stage.duration_seconds:
+                table.add_row(f"  Duration", f"{stage.duration_seconds:.2f}s")
+
+        console.print(table)
+
+        # Display output files
+        console.print("\n[bold]📁 Generated Files:[/bold]")
+        files_table = Table(show_header=True, box=None)
+        files_table.add_column("File", style="cyan")
+        files_table.add_column("Size", style="yellow")
+
+        for file_path in output_dir.glob("*"):
+            if file_path.is_file():
+                size_mb = file_path.stat().st_size / (1024 * 1024)
+                files_table.add_row(file_path.name, f"{size_mb:.2f} MB")
+
+        console.print(files_table)
+        console.print("\n" + "=" * 60 + "\n")
+
+    except KeyboardInterrupt:
+        console.print("\n[yellow]⚠️  Pipeline interrupted by user[/yellow]")
+        raise typer.Exit(1)
+
+    except Exception as e:
+        console.print(f"\n[bold red]❌ Pipeline failed: {e}[/bold red]")
+        logger.exception("Pipeline error")
         raise typer.Exit(1)
 
 

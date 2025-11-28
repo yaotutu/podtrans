@@ -167,7 +167,7 @@ def main():
         "--output", str(tts_file)
     ]
 
-    success, duration, output = run_command(tts_cmd, "TTS (语音合成)", timeout=3600)  # 60分钟
+    success, duration, output = run_command(tts_cmd, "TTS (语音合成)", timeout=7200)  # 120分钟
     tts_duration = time.time() - tts_start_time
     step_times["TTS"] = tts_duration
 
