@@ -50,6 +50,9 @@ dependencies = [
     # Data processing
     "orjson>=3.10.0",
 
+    # RSS feed processing
+    "feedparser>=6.0.0",
+
     # Environment variables
     "python-dotenv>=1.0.0",
 ]

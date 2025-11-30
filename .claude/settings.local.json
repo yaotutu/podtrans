@@ -50,7 +50,10 @@
       "Bash(lscpu:*)",
       "Bash(ffmpeg:*)",
       "Bash(ruff check:*)",
-      "Bash(ruff format:*)"
+      "Bash(ruff format:*)",
+      "Bash(git restore:*)",
+      "Bash(ffprobe:*)",
+      "Bash(conda run:*)"
     ],
     "deny": [],
     "ask": []

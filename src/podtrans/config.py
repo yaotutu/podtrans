@@ -125,8 +125,21 @@ class Settings(BaseSettings):
         description="SoulX CLI top-p sampling",
     )
     soulx_conda_env: str = Field(
-        default="soulx-podcast",
+        default="soulxpodcast",
         description="Conda environment name for SoulX CLI",
+    )
+
+    # ===================================
+    # Audio Segmentation Configuration
+    audio_segment_max_duration: float = Field(
+        default=600.0,
+        ge=60.0,
+        le=3600.0,
+        description="Maximum duration per audio segment in seconds (default: 10 minutes)",
+    )
+    audio_segment_enabled: bool = Field(
+        default=True,
+        description="Enable automatic audio segmentation for long episodes",
     )
 
     # ===================================
@@ -179,14 +192,62 @@ class Settings(BaseSettings):
         le=10.0,
         description="Maximum gap between merged segments in seconds (default: 2.0)",
     )
+
+    # ===================================
+    # RSS Feed Configuration
+    # ===================================
+    rss_download_dir: Path = Field(
+        default=Path("./data/rss_downloads"),
+        description="Directory for downloaded RSS episode audio files",
+    )
+    rss_cache_dir: Path = Field(
+        default=Path("./data/rss_cache"),
+        description="Directory for RSS feed cache and tracking data",
+    )
+    rss_max_episode_age_days: int = Field(
+        default=30,
+        ge=1,
+        le=365,
+        description="Maximum age of episodes to download and process (in days)",
+    )
+    rss_max_episodes_per_feed: int = Field(
+        default=10,
+        ge=1,
+        le=100,
+        description="Maximum number of episodes to download per RSS feed",
+    )
+    rss_timeout: int = Field(
+        default=60,
+        ge=10,
+        le=300,
+        description="RSS feed fetch timeout in seconds",
+    )
+    rss_user_agent: str = Field(
+        default="PodTrans/0.1.0 (RSS Feed Parser)",
+        description="User agent string for RSS feed requests",
+    )
+    rss_max_file_size_mb: int = Field(
+        default=500,
+        ge=10,
+        le=5000,
+        description="Maximum audio file size to download (in megabytes)",
+    )
+    rss_supported_formats: list[str] = Field(
+        default=["mp3", "wav", "m4a", "ogg", "flac", "aac"],
+        description="List of supported audio file formats for RSS downloads",
+    )
+    rss_verify_ssl: bool = Field(
+        default=True,
+        description="Verify SSL certificates for RSS feed requests",
+    )
     max_retries: int = Field(
         default=3,
         ge=0,
         le=10,
-        description="Maximum retries for API calls",
+        description="Maximum retries for API calls and downloads",
     )
 
-    @field_validator("output_dir", "log_dir")
+    @field_validator("output_dir", "log_dir", "rss_download_dir", "rss_cache_dir")
     @classmethod
     def create_dir_if_not_exists(cls, v: Path) -> Path:
         """Create directory if it doesn't exist."""

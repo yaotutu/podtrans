@@ -1101,6 +1101,474 @@ def extract_samples(
 
 
 @app.command()
+def rss(
+    rss_url: str = typer.Argument(
+        ...,
+        help="RSS feed URL to fetch podcast episodes from",
+    ),
+    count: int = typer.Option(
+        1,
+        "--count",
+        "-c",
+        help="Number of latest episodes to download (default: 1)",
+    ),
+    output: Path | None = typer.Option(
+        None,
+        "--output",
+        "-o",
+        help="Output directory (default: data/output/rss_{timestamp})",
+    ),
+    language: str | None = typer.Option(
+        None,
+        "--language",
+        "-l",
+        help="Language code for ASR (e.g., 'en', 'zh'). Auto-detect if not specified",
+    ),
+    source_lang: str = typer.Option(
+        "en",
+        "--source",
+        "-s",
+        help="Source language for translation",
+    ),
+    target_lang: str = typer.Option(
+        "zh",
+        "--target",
+        "-t",
+        help="Target language for translation",
+    ),
+    no_diarization: bool = typer.Option(
+        False,
+        "--no-diarization",
+        help="Disable speaker diarization",
+    ),
+    no_voice_samples: bool = typer.Option(
+        False,
+        "--no-voice-samples",
+        help="Disable voice sample extraction",
+    ),
+    keep_downloads: bool = typer.Option(
+        False,
+        "--keep-downloads",
+        help="Keep downloaded audio files after processing",
+    ),
+    max_segment_duration: float | None = typer.Option(
+        None,
+        "--max-segment-duration",
+        help="Maximum duration per audio segment in seconds (default: from config)",
+    ),
+    no_segmentation: bool = typer.Option(
+        False,
+        "--no-segmentation",
+        help="Disable automatic audio segmentation for long episodes",
+    ),
+    min_sample_duration: float | None = typer.Option(
+        None,
+        "--min-sample-duration",
+        help="Minimum voice sample duration in seconds (default: from config)",
+    ),
+    max_sample_duration: float | None = typer.Option(
+        None,
+        "--max-sample-duration",
+        help="Maximum voice sample duration in seconds (default: from config)",
+    ),
+    min_sample_quality: float | None = typer.Option(
+        None,
+        "--min-sample-quality",
+        help="Minimum voice sample quality score (0-100, default: from config)",
+    ),
+) -> None:
+    """Fetch and process podcast episodes from RSS feeds.
+
+    This command automates the complete podcast translation workflow:
+    1. Parse RSS feed and fetch episode information
+    2. Download audio files for latest episodes
+    3. Run complete pipeline (ASR → Voice Samples → Translation → TTS)
+
+    Examples:
+        # Process latest episode from RSS feed
+        podtrans rss https://feeds.simplecast.com/your-podcast
+
+        # Process 3 latest episodes
+        podtrans rss https://example.com/feed.xml --count 3
+
+        # Custom output directory and languages
+        podtrans rss https://feeds.example.com/podcast -o ./results -s en -t zh
+
+        # Disable voice samples and keep downloads
+        podtrans rss https://feeds.example.com/podcast --no-voice-samples --keep-downloads
+    """
+    import time
+    import shutil
+    from pathlib import Path
+
+    from podtrans.rss.fetcher import RSSFetcher
+    from podtrans.rss.downloader import AudioDownloader
+    from podtrans.utils.file import write_json
+
+    settings = get_settings()
+    start_time = time.time()
+
+    # Display header
+    console.print("\n[bold blue]🎙️  PodTrans - RSS Processing[/bold blue]\n")
+    console.print(f"[dim]RSS Feed:[/dim] {rss_url}")
+    console.print(f"[dim]Episodes to process:[/dim] {count}")
+    console.print(f"[dim]Translation:[/dim] {source_lang} → {target_lang}")
+    console.print(f"[dim]Voice samples:[/dim] {'Disabled' if no_voice_samples else 'Enabled'}")
+    console.print(f"[dim]Keep downloads:[/dim] {'Yes' if keep_downloads else 'No'}\n")
+
+    # Validate RSS URL
+    console.print("[bold cyan]📡 Validating RSS feed...[/bold cyan]")
+    fetcher = RSSFetcher()
+    if not fetcher.validate_feed_url(rss_url):
+        console.print("[bold red]❌ Invalid RSS feed URL[/bold red]")
+        raise typer.Exit(1)
+    console.print("[green]✓[/green] RSS feed URL is valid\n")
+
+    # Set up output directory
+    if output is None:
+        timestamp = int(time.time())
+        output_dir = settings.output_dir / f"rss_{timestamp}"
+    else:
+        output_dir = Path(output)
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    console.print(f"[dim]Output directory:[/dim] {output_dir}\n")
+
+    # Fetch RSS feed
+    console.print("[bold cyan]📰 Fetching RSS feed...[/bold cyan]")
+    try:
+        rss_feed = fetcher.fetch_feed(rss_url, max_episodes=count)
+        console.print(f"[green]✓[/green] Feed: {rss_feed.title}")
+        console.print(f"[green]✓[/green] Episodes found: {rss_feed.total_episodes}")
+        console.print(f"[green]✓[/green] Episodes to process: {len(rss_feed.episodes)}\n")
+    except Exception as e:
+        console.print(f"[bold red]❌ Failed to fetch RSS feed: {e}[/bold red]")
+        logger.exception("RSS fetch error")
+        raise typer.Exit(1)
+
+    if not rss_feed.episodes:
+        console.print("[yellow]⚠️  No episodes found in RSS feed[/yellow]")
+        raise typer.Exit(0)
+
+    # Download episodes
+    download_dir = settings.rss_download_dir / f"rss_{int(time.time())}"
+    downloader = AudioDownloader()
+    downloaded_files = []
+    failed_episodes = []
+
+    console.print("[bold cyan]⬇️  Downloading episodes...[/bold cyan]")
+    try:
+        downloaded_files = downloader.download_episodes(rss_feed.episodes, download_dir)
+        console.print(f"[green]✓[/green] Downloaded: {len(downloaded_files)} files")
+
+        if failed_episodes := len(rss_feed.episodes) - len(downloaded_files):
+            console.print(f"[yellow]⚠️  Failed: {failed_episodes} files[/yellow]")
+    except Exception as e:
+        console.print(f"[bold red]❌ Download failed: {e}[/bold red]")
+        logger.exception("Download error")
+        raise typer.Exit(1)
+
+    if not downloaded_files:
+        console.print("[bold red]❌ No episodes downloaded successfully[/bold red]")
+        raise typer.Exit(1)
+
+    # Create cache directory for simple filenames
+    cache_dir = settings.rss_cache_dir / f"rss_{int(time.time())}"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+
+    # Copy downloaded files to cache with simple names
+    cached_files = []
+    for i, downloaded_file in enumerate(downloaded_files):
+        # Create simple filename: episode_001.mp3, episode_002.mp3, etc.
+        simple_name = f"episode_{i+1:03d}.mp3"
+        cached_file = cache_dir / simple_name
+
+        # Copy file
+        import shutil
+        shutil.copy2(downloaded_file, cached_file)
+        cached_files.append(cached_file)
+
+        logger.info(f"Cached {downloaded_file} -> {cached_file}")
+
+    # Apply audio segmentation if enabled
+    final_processing_files = []
+
+    if no_segmentation or not settings.audio_segment_enabled:
+        # No segmentation
+        final_processing_files = cached_files
+        console.print("[dim]Audio segmentation: disabled[/dim]")
+    else:
+        # Apply audio segmentation
+        segment_duration = max_segment_duration or settings.audio_segment_max_duration
+        console.print(f"[dim]Audio segmentation: enabled (max {segment_duration}s per segment)[/dim]")
+
+        from podtrans.utils.audio_segmenter import split_long_audio
+
+        for i, cached_file in enumerate(cached_files):
+            console.print(f"[blue]🔍 Checking {cached_file.name} for segmentation...[/blue]")
+
+            try:
+                # Create segment directory for this episode
+                episode_segment_dir = cache_dir / f"episode_{i+1:03d}_segments"
+                episode_segment_dir.mkdir(exist_ok=True)
+
+                # Split if needed
+                segment_files = split_long_audio(cached_file, episode_segment_dir, segment_duration)
+                final_processing_files.extend(segment_files)
+
+                if len(segment_files) > 1:
+                    console.print(f"[green]   ✓ Split into {len(segment_files)} segments[/green]")
+                else:
+                    console.print(f"[dim]   ✓ No segmentation needed[/dim]")
+
+            except Exception as e:
+                console.print(f"[yellow]⚠️  Segmentation failed for {cached_file.name}: {e}[/yellow]")
+                # Fall back to original file
+                final_processing_files.append(cached_file)
+
+    processing_files = final_processing_files
+    console.print(f"[dim]Total files to process: {len(processing_files)}[/dim]\n")
+
+    # Process each episode/segment
+    processed_episodes = []
+    failed_processing = []
+
+    # Create episode -> segments mapping
+    episode_segments = {}  # episode_index -> [segment_files]
+
+    for file_index, audio_path in enumerate(processing_files):
+        # Determine which episode this file belongs to
+        episode_index = 0
+        is_segment = False
+
+        # Check if this is a segment file
+        if "segments" in str(audio_path) and "_part_" in str(audio_path):
+            # Extract episode number from path like "episode_001_segments/episode_001_part_001.mp3"
+            import re
+            match = re.search(r'episode_(\d+)_segments', str(audio_path))
+            if match:
+                episode_index = int(match.group(1)) - 1  # Convert to 0-based
+                is_segment = True
+            else:
+                # Fallback: try to get episode from filename prefix
+                match = re.search(r'episode_(\d+)_part_(\d+)', audio_path.name)
+                if match:
+                    episode_index = int(match.group(1)) - 1
+                    is_segment = True
+        else:
+            # This is a non-segmented episode file
+            if file_index < len(cached_files):
+                episode_index = file_index
+            else:
+                episode_index = 0  # Default to first episode
+
+        # Ensure episode_index is within bounds
+        episode_index = min(episode_index, len(rss_feed.episodes) - 1)
+
+        # Add to episode segments mapping
+        if episode_index not in episode_segments:
+            episode_segments[episode_index] = []
+        episode_segments[episode_index].append(audio_path)
+
+    # Process each episode and all its segments
+    for episode_index, segment_files in episode_segments.items():
+        episode = rss_feed.episodes[episode_index]
+
+        console.print(f"[bold cyan]🔄 Processing episode {episode_index + 1}/{len(rss_feed.episodes)}:[/bold cyan] {episode.title}")
+        if len(segment_files) > 1:
+            console.print(f"[dim]   Split into {len(segment_files)} segments[/dim]")
+
+        # Create episode-specific output directory
+        simple_name = f"episode_{episode_index + 1:03d}"
+        episode_dir = output_dir / simple_name
+        episode_dir.mkdir(parents=True, exist_ok=True)
+
+        # Process all segments for this episode
+        episode_success = True
+        all_pipeline_results = []
+
+        for segment_index, audio_path in enumerate(segment_files):
+            if len(segment_files) > 1:
+                console.print(f"[blue]   → Segment {segment_index + 1}/{len(segment_files)}[/blue]")
+
+            try:
+                # Run pipeline orchestrator with cached file (simple filename!)
+                orchestrator = PipelineOrchestrator(episode_dir)
+                pipeline_meta = asyncio.run(
+                    orchestrator.run_pipeline(
+                        audio_path=audio_path,  # Now uses simple cached filename
+                        language=language,
+                        enable_diarization=not no_diarization,
+                        source_lang=source_lang,
+                        target_lang=target_lang,
+                        extract_voice_samples=False
+                        if no_voice_samples
+                        else None,  # Use config default if not disabled
+                        min_duration=min_sample_duration,
+                        max_duration=max_sample_duration,
+                        min_quality=min_sample_quality,
+                    )
+                )
+                all_pipeline_results.append(pipeline_meta)
+
+            except Exception as e:
+                console.print(f"  [red]✗[/red] Segment {segment_index + 1} failed: {e}")
+                episode_success = False
+                logger.exception(f"Segment processing failed for {audio_path}: {e}")
+
+        if episode_success and all_pipeline_results:
+            processed_episodes.append({
+                'episode_title': episode.title,
+                'episode_description': episode.description,
+                'audio_url': episode.audio_url,
+                'duration': episode.duration,
+                'output_dir': str(episode_dir),
+                'segments_count': len(segment_files),
+                'pipeline_metadata': [meta.model_dump() for meta in all_pipeline_results],
+            })
+            console.print(f"  [green]✓[/green] Processing complete")
+        else:
+            failed_processing.append({
+                'episode_title': episode.title,
+                'error': "One or more segments failed",
+            })
+
+        console.print()
+
+    # Clean up downloads if requested
+    if not keep_downloads and download_dir.exists():
+        try:
+            shutil.rmtree(download_dir)
+            console.print(f"[dim]Cleaned up download directory: {download_dir}[/dim]\n")
+        except Exception as e:
+            console.print(f"[yellow]⚠️  Failed to clean up downloads: {e}[/yellow]\n")
+
+    # Create processing result summary
+    total_time = time.time() - start_time
+    success_rate = (len(processed_episodes) / len(rss_feed.episodes)) * 100 if rss_feed.episodes else 0
+
+    processing_result = {
+        'feed_url': rss_url,
+        'feed_title': rss_feed.title,
+        'feed_description': rss_feed.description,
+        'episodes_requested': count,
+        'episodes_found': rss_feed.total_episodes,
+        'episodes_downloaded': len(downloaded_files),
+        'episodes_processed': len(processed_episodes),
+        'episodes_failed': len(failed_processing),
+        'success_rate': success_rate,
+        'processing_time_seconds': total_time,
+        'output_directory': str(output_dir),
+        'settings': {
+            'source_lang': source_lang,
+            'target_lang': target_lang,
+            'voice_samples_enabled': not no_voice_samples,
+            'keep_downloads': keep_downloads,
+        },
+        'processed_episodes': processed_episodes,
+        'failed_episodes': failed_processing,
+        'timestamp': time.strftime('%Y-%m-%d %H:%M:%S'),
+    }
+
+    # Save processing results
+    results_file = output_dir / "rss_processing_results.json"
+    try:
+        write_json(processing_result, results_file, indent=2)
+        console.print(f"[green]✓[/green] Results saved to: {results_file}")
+    except Exception as e:
+        console.print(f"[yellow]⚠️  Failed to save results: {e}[/yellow]")
+
+    # Display final summary
+    console.print("\n" + "=" * 60)
+    console.print("[bold green]✨ RSS Processing Complete![/bold green]\n")
+
+    # Summary table
+    table = Table(show_header=False, box=None)
+    table.add_column("Key", style="cyan")
+    table.add_column("Value", style="white")
+
+    table.add_row("Feed Title", rss_feed.title)
+    table.add_row("Episodes Requested", str(count))
+    table.add_row("Episodes Found", str(rss_feed.total_episodes))
+    table.add_row("Episodes Downloaded", f"{len(downloaded_files)}/{len(rss_feed.episodes)}")
+    table.add_row("Episodes Processed", f"{len(processed_episodes)}/{len(downloaded_files)}")
+    table.add_row("Success Rate", f"{success_rate:.1f}%")
+    table.add_row("Processing Time", f"{total_time:.1f} seconds")
+    table.add_row("Output Directory", str(output_dir))
+
+    console.print(table)
+
+    if processed_episodes:
+        console.print("\n[bold]📁 Processed Episodes:[/bold]")
+        for i, episode in enumerate(processed_episodes, 1):
+            console.print(f"  {i}. {episode['episode_title']}")
+            console.print(f"     [dim]{episode['output_dir']}[/dim]")
+
+    if failed_processing:
+        console.print(f"\n[yellow]⚠️  Failed Episodes: {len(failed_processing)}[/yellow]")
+        for episode in failed_processing:
+            console.print(f"  • {episode['episode_title']}: {episode['error']}")
+
+    # Audio merging for segmented outputs
+    if processed_episodes:
+        console.print("\n[bold]🔄 Checking for segmented audio outputs...[/bold]")
+
+        try:
+            from .utils.audio_merger import merge_segments_in_directory, create_episode_playlist
+
+            merged_episodes = []
+
+            for episode in processed_episodes:
+                episode_output_dir = Path(episode['output_dir'])
+
+                # Check if this episode has segmented TTS outputs
+                segment_files = list(episode_output_dir.glob("**/segment_*_tts_output.wav"))
+
+                if segment_files and len(segment_files) > 1:
+                    console.print(f"[blue]🎵 Merging segments for: {episode['episode_title']}[/blue]")
+
+                    # Merge segments for this episode
+                    merged_files = merge_segments_in_directory(episode_output_dir)
+
+                    if merged_files:
+                        merged_episodes.extend(merged_files)
+                        console.print(f"[green]✓ Merged {len(merged_files)} audio files[/green]")
+                    else:
+                        console.print(f"[yellow]⚠️  No segments found for merging[/yellow]")
+
+            # Create playlist if we have merged files
+            if merged_episodes:
+                playlist_path = output_dir / "merged_episodes_playlist.m3u"
+                create_episode_playlist(merged_episodes, playlist_path)
+                console.print(f"\n[bold green]🎉 Audio merging complete![/bold green]")
+                console.print(f"[green]📁 Playlist: {playlist_path}[/green]")
+
+                # Display merged files info
+                console.print("\n[bold]🎵 Merged Episodes:[/bold]")
+                for i, merged_file in enumerate(merged_episodes, 1):
+                    size_mb = merged_file.stat().st_size / (1024 * 1024)
+                    console.print(f"  {i}. {merged_file.name} ({size_mb:.1f} MB)")
+
+        except ImportError:
+            console.print("[yellow]⚠️  Audio merging requires torchaudio, skipping...[/yellow]")
+        except Exception as e:
+            console.print(f"[yellow]⚠️  Audio merging failed: {e}[/yellow]")
+            logger.warning(f"Audio merging failed: {e}")
+
+    # Cleanup cache if not keeping downloads
+    if not keep_downloads:
+        try:
+            # Remove cache directory
+            import shutil
+            shutil.rmtree(cache_dir)
+            logger.info(f"Cleaned up cache directory: {cache_dir}")
+        except Exception as e:
+            logger.warning(f"Failed to clean up cache directory {cache_dir}: {e}")
+
+    console.print("\n" + "=" * 60 + "\n")
+
+
+@app.command()
 def version() -> None:
     """Show version information."""
     console.print(
