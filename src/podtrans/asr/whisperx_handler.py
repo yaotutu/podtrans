@@ -152,11 +152,12 @@ class WhisperXHandler:
         logger.info(f"正在加载 Whisper 模型: {self.model_name}")
 
         try:
-            # 调用 WhisperX 的模型加载函数
+            # 调用 WhisperX 的模型加载函数，强制使用本地文件
             self.model = whisperx.load_model(
                 self.model_name,
                 self.device,
                 compute_type=self.compute_type,
+                local_files_only=True,  # 强制使用本地模型，不访问网络
             )
             logger.info("Whisper 模型加载成功")
         except Exception as e:
@@ -643,6 +644,11 @@ class WhisperXHandler:
         if enable_diarization and self.hf_token:
             # 复用同一个 audio 数组进行说话人分离
             diarize_segments = self.diarize(audio=audio)
+
+            # 如果说话人分离失败，停止流程
+            if diarize_segments is None:
+                raise RuntimeError("说话人分离失败，无法继续处理。请检查网络连接和 HF_TOKEN 配置。")
+
             result = self.assign_speakers(diarize_segments, result)
             logger.info("Step 3 完成 - 说话人分离和标签分配")
         else:

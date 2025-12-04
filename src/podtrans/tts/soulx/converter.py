@@ -57,6 +57,11 @@ class SoulXConverter:
             if seg.speaker:
                 unique_speakers.add(seg.speaker)
 
+        # If no speakers found, create a default speaker
+        if not unique_speakers:
+            logger.info("No speakers found in translation, creating default speaker")
+            return {"DEFAULT": "S1"}
+
         # Sort for consistency
         sorted_speakers = sorted(unique_speakers)
 
@@ -114,7 +119,13 @@ class SoulXConverter:
         """
         text_array = []
         for seg in translation_result.segments:
-            soulx_speaker_id = speaker_mapping.get(seg.speaker, "S1")
+            # Use mapped speaker or default to S1
+            if seg.speaker and seg.speaker in speaker_mapping:
+                soulx_speaker_id = speaker_mapping[seg.speaker]
+            else:
+                # Use the first available speaker (for cases without speaker diarization)
+                soulx_speaker_id = next(iter(speaker_mapping.values()))
+
             text_array.append([soulx_speaker_id, seg.translated_text])
 
         return text_array

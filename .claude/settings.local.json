@@ -53,7 +53,10 @@
       "Bash(ruff format:*)",
       "Bash(git restore:*)",
       "Bash(ffprobe:*)",
-      "Bash(conda run:*)"
+      "Bash(conda run:*)",
+      "Bash(/home/yaotutu/podtrans/soulx-podcast:*)",
+      "Bash(/home/yaotutu/miniconda3/envs/podtrans/bin/pip list:*)",
+      "Bash(/home/yaotutu/miniconda3/envs/podtrans/bin/python:*)"
     ],
     "deny": [],
     "ask": []
