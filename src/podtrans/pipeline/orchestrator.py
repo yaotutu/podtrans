@@ -26,15 +26,22 @@ class PipelineOrchestrator:
     using subprocess calls, providing better integration and error handling.
     """
 
-    def __init__(self, output_dir: Path):
+    def __init__(self, output_dir: Path, segment_id: Optional[str] = None):
         """Initialize the pipeline orchestrator.
 
         Args:
             output_dir: Directory where all output files will be saved
+            segment_id: Optional segment identifier (e.g., "episode_001_part_001")
         """
         settings = get_settings()
         self.settings = settings
-        self.output_dir = output_dir
+        self.segment_id = segment_id
+
+        # Create segment-specific directory if segment_id is provided
+        if segment_id:
+            self.output_dir = output_dir / segment_id
+        else:
+            self.output_dir = output_dir
 
         # Ensure output directory exists
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -83,7 +90,7 @@ class PipelineOrchestrator:
         max_duration: Optional[float] = None,
         min_quality: Optional[float] = None,
     ) -> PipelineMetadata:
-        """Run the complete pipeline (ASR → Translation → TTS → Voice Samples).
+        """Run the content processing pipeline (ASR → Voice Samples → Translation → SoulX Format).
 
         Args:
             audio_path: Path to input audio file
@@ -115,6 +122,10 @@ class PipelineOrchestrator:
             min_quality = self.settings.voice_sample_min_quality
 
         try:
+            # Stage 0: Copy audio file to segment directory (for traceability)
+            if self.segment_id:  # Only for segment-level processing
+                await self._copy_audio_to_segment_dir(audio_path)
+
             # Stage 1: ASR
             await self._run_asr_stage(
                 audio_path, language, enable_diarization, pipeline_meta
@@ -140,13 +151,13 @@ class PipelineOrchestrator:
                     source_lang, target_lang, pipeline_meta
                 )
 
-            # Stage 4: TTS
+            # Stage 4: SoulX Format Conversion
             translation_stage = pipeline_meta.get_stage("translation")
             if (
                 translation_stage is not None
                 and translation_stage.status == StageStatus.SUCCESS
             ):
-                await self._run_tts_stage(pipeline_meta)
+                await self._convert_to_soulx_format(pipeline_meta)
 
         except Exception as e:
             pipeline_meta.update_stage("pipeline", StageStatus.FAILED, error=str(e))
@@ -282,6 +293,49 @@ class PipelineOrchestrator:
             logger.error(f"TTS stage failed: {e}")
             raise
 
+    async def _convert_to_soulx_format(self, pipeline_meta: PipelineMetadata) -> None:
+        """Convert translation result to SoulX format and save as JSON."""
+        import json
+        from podtrans.tts.soulx.converter import SoulXConverter
+
+        logger.info("Starting SoulX format conversion")
+        pipeline_meta.update_stage("soulx_format", StageStatus.RUNNING)
+
+        try:
+            if not self._translation_result:
+                raise ValueError("Translation result is required for SoulX format conversion")
+
+            # 1. 创建speaker configs，使用最佳样本的路径
+            speaker_configs = self._create_speaker_configs()
+
+            # 2. 使用SoulXConverter进行转换
+            converter = SoulXConverter()
+
+            # 转换格式，传入最佳样本配置
+            soulx_data = converter.convert(
+                self._translation_result,
+                speaker_configs=speaker_configs
+            )
+
+            # 保存JSON文件
+            output_path = self.output_dir / "soulx_format.json"
+            with open(output_path, 'w', encoding='utf-8') as f:
+                json.dump(soulx_data, f, ensure_ascii=False, indent=2)
+
+            # 更新metadata
+            pipeline_meta.update_stage(
+                "soulx_format",
+                StageStatus.SUCCESS,
+                metadata={"output_file": str(output_path)}
+            )
+
+            logger.info(f"SoulX format conversion completed: {output_path}")
+
+        except Exception as e:
+            pipeline_meta.update_stage("soulx_format", StageStatus.FAILED, error=str(e))
+            logger.error(f"SoulX format conversion failed: {e}")
+            raise
+
     async def _run_voice_samples_stage(
         self,
         audio_path: Path,
@@ -296,9 +350,8 @@ class PipelineOrchestrator:
         pipeline_meta.update_stage("voice_samples", StageStatus.RUNNING)
 
         try:
-            # Create voice samples directory with audio filename
-            audio_name = Path(pipeline_meta.audio_file).stem
-            voice_samples_dir = self.output_dir / f"{audio_name}_voice_samples"
+            # Create voice samples directory inside segment directory
+            voice_samples_dir = self.output_dir / "voice_samples"
             voice_samples_dir.mkdir(exist_ok=True)
 
             # Extract voice samples using the ASR handler
@@ -389,23 +442,114 @@ class PipelineOrchestrator:
         """
         speaker_configs = []
 
-        if not self._voice_samples_result:
-            return speaker_configs
+        # 首先尝试从voice_samples_for_cloning目录获取最佳样本
+        voice_samples_dir = self.output_dir / "voice_samples_for_cloning"
+        if voice_samples_dir.exists():
+            speaker_configs = self._create_speaker_configs_from_best_samples(voice_samples_dir)
+            if speaker_configs:
+                logger.info(f"Created {len(speaker_configs)} speaker configs from best voice samples")
+                return speaker_configs
 
-        for (
-            speaker_id,
-            voice_sample,
-        ) in self._voice_samples_result.speaker_samples.items():
+        # 回退到从pipeline中的voice samples result创建
+        if self._voice_samples_result:
+            speaker_configs = self._create_speaker_configs_from_pipeline_result()
+            logger.info(f"Created {len(speaker_configs)} speaker configs from pipeline result")
+
+        return speaker_configs
+
+    def _create_speaker_configs_from_best_samples(self, voice_samples_dir: Path) -> list[SpeakerConfig]:
+        """Create speaker configs from voice_samples_for_cloning directory.
+
+        Args:
+            voice_samples_dir: Directory containing best voice samples and descriptions
+
+        Returns:
+            List of SpeakerConfig objects with absolute audio paths
+        """
+        speaker_configs = []
+
+        # 查找所有音频文件
+        for audio_file in voice_samples_dir.glob("*.wav"):
+            if audio_file.is_file():
+                speaker_id = audio_file.stem  # 例如: SPEAKER_00.wav -> SPEAKER_00
+
+                # 获取该speaker的实际英文文本内容
+                english_text = self._get_sample_english_text(speaker_id)
+
+                # 创建SpeakerConfig，使用绝对路径和英文文本内容
+                config = SpeakerConfig(
+                    speaker_id=speaker_id,
+                    voice_sample=audio_file.absolute(),  # 使用绝对路径
+                    voice_description=english_text,  # 使用音频的实际英文内容
+                )
+                speaker_configs.append(config)
+
+        return speaker_configs
+
+    def _get_sample_english_text(self, speaker_id: str) -> str:
+        """Get the English text content for a voice sample.
+
+        Args:
+            speaker_id: Speaker identifier (e.g., "SPEAKER_00")
+
+        Returns:
+            English text content from the voice sample
+        """
+        # 首先尝试从segment的extraction_summary.json获取
+        # 扫描所有segment目录查找该speaker的voice sample
+        for segment_dir in self.output_dir.iterdir():
+            if not segment_dir.is_dir() or not segment_dir.name.startswith("episode_"):
+                continue
+
+            voice_samples_dir = segment_dir / "voice_samples"
+            if not voice_samples_dir.exists():
+                continue
+
+            summary_file = voice_samples_dir / "extraction_summary.json"
+            if summary_file.exists():
+                try:
+                    import json
+                    with open(summary_file, 'r', encoding='utf-8') as f:
+                        summary = json.load(f)
+
+                    # 查找该speaker的样本信息
+                    if "samples" in summary and speaker_id in summary["samples"]:
+                        sample_info = summary["samples"][speaker_id]
+                        text_content = sample_info.get("text_content", "")
+                        if text_content and text_content.strip():
+                            return text_content.strip()
+
+                except Exception as e:
+                    logger.debug(f"Failed to read extraction summary from {summary_file}: {e}")
+
+        # 如果没有找到，尝试从voice_samples_result获取
+        if self._voice_samples_result and speaker_id in self._voice_samples_result.speaker_samples:
+            voice_sample = self._voice_samples_result.speaker_samples[speaker_id]
+            if voice_sample.text_content and voice_sample.text_content.strip():
+                return voice_sample.text_content.strip()
+
+        # 如果都没有找到，返回默认文本
+        return f"Voice sample for {speaker_id}"
+
+    def _create_speaker_configs_from_pipeline_result(self) -> list[SpeakerConfig]:
+        """Create speaker configs from pipeline voice samples result.
+
+        Returns:
+            List of SpeakerConfig objects with voice sample paths
+        """
+        speaker_configs = []
+
+        for speaker_id, voice_sample in self._voice_samples_result.speaker_samples.items():
+            # 使用voice sample的实际英文文本内容
+            english_text = voice_sample.text_content if voice_sample.text_content.strip() else f"Voice sample for {speaker_id}"
+
             config = SpeakerConfig(
                 speaker_id=speaker_id,
-                voice_sample=voice_sample.audio_path,
-                voice_description=voice_sample.recommended_use,
+                voice_sample=voice_sample.audio_path.absolute(),  # 使用绝对路径
+                voice_description=english_text,  # 使用音频的实际英文内容
             )
             speaker_configs.append(config)
 
-        logger.info(
-            f"Created {len(speaker_configs)} speaker configs from voice samples"
-        )
         return speaker_configs
 
     def _save_pipeline_metadata(self, pipeline_meta: PipelineMetadata) -> None:
@@ -442,3 +586,20 @@ class PipelineOrchestrator:
             }
 
         return analysis
+
+    async def _copy_audio_to_segment_dir(self, audio_path: Path) -> None:
+        """Copy the original audio file to segment directory for traceability.
+
+        Args:
+            audio_path: Path to the original audio file
+        """
+        import shutil
+
+        try:
+            # Copy audio file to segment directory with a clear name
+            target_path = self.output_dir / "audio_segment.mp3"
+            shutil.copy2(audio_path, target_path)
+            logger.info(f"Copied audio file to segment directory: {target_path}")
+        except Exception as e:
+            logger.warning(f"Failed to copy audio file to segment directory: {e}")
+            # Don't fail the pipeline if audio copy fails

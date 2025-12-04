@@ -1179,10 +1179,16 @@ def rss(
 ) -> None:
     """Fetch and process podcast episodes from RSS feeds.
 
-    This command automates the complete podcast translation workflow:
+    This command automates the podcast content processing workflow:
     1. Parse RSS feed and fetch episode information
     2. Download audio files for latest episodes
-    3. Run complete pipeline (ASR → Voice Samples → Translation → TTS)
+    3. Run content processing pipeline (ASR → Voice Samples → Translation → SoulX Format)
+
+    The output includes:
+    - ASR transcription results with speaker diarization
+    - Voice samples for each speaker (if enabled)
+    - Chinese translation results
+    - SoulX format JSON file ready for TTS processing
 
     Examples:
         # Process latest episode from RSS feed
@@ -1209,11 +1215,12 @@ def rss(
     start_time = time.time()
 
     # Display header
-    console.print("\n[bold blue]🎙️  PodTrans - RSS Processing[/bold blue]\n")
+    console.print("\n[bold blue]🎙️  PodTrans - RSS Content Processing[/bold blue]\n")
     console.print(f"[dim]RSS Feed:[/dim] {rss_url}")
     console.print(f"[dim]Episodes to process:[/dim] {count}")
     console.print(f"[dim]Translation:[/dim] {source_lang} → {target_lang}")
     console.print(f"[dim]Voice samples:[/dim] {'Disabled' if no_voice_samples else 'Enabled'}")
+    console.print(f"[dim]Output format:[/dim] SoulX JSON (ready for TTS)")
     console.print(f"[dim]Keep downloads:[/dim] {'Yes' if keep_downloads else 'No'}\n")
 
     # Validate RSS URL
@@ -1392,8 +1399,12 @@ def rss(
                 console.print(f"[blue]   → Segment {segment_index + 1}/{len(segment_files)}[/blue]")
 
             try:
-                # Run pipeline orchestrator with cached file (simple filename!)
-                orchestrator = PipelineOrchestrator(episode_dir)
+                # Create segment identifier for this specific segment
+                episode_name = simple_name  # e.g., "episode_001"
+                segment_id = f"{episode_name}_part_{segment_index + 1:03d}"
+
+                # Run pipeline orchestrator with segment-specific directory
+                orchestrator = PipelineOrchestrator(episode_dir, segment_id=segment_id)
                 pipeline_meta = asyncio.run(
                     orchestrator.run_pipeline(
                         audio_path=audio_path,  # Now uses simple cached filename
@@ -1417,6 +1428,37 @@ def rss(
                 logger.exception(f"Segment processing failed for {audio_path}: {e}")
 
         if episode_success and all_pipeline_results:
+            # Extract best voice samples for cloning
+            if no_voice_samples:
+                console.print(f"[blue]   → Skipping voice samples extraction (disabled)[/blue]")
+            else:
+                console.print(f"[blue]   → Extracting best voice samples for cloning...[/blue]")
+                try:
+                    from podtrans.utils.voice_samples_extractor import VoiceSamplesExtractor
+                    extractor = VoiceSamplesExtractor(episode_dir)
+                    voice_samples_dir = extractor.process_episode()
+
+                    if voice_samples_dir:
+                        # 计算提取的样本数量
+                        sample_count = len(list(voice_samples_dir.glob("SPEAKER_*.wav")))
+                        console.print(f"  [green]✓[/green] Extracted {sample_count} best voice samples for cloning")
+                    else:
+                        console.print(f"  [yellow]⚠️  No voice samples found[/yellow]")
+
+                except Exception as e:
+                    console.print(f"  [yellow]⚠️  Voice samples extraction failed: {e}[/yellow]")
+                    logger.warning(f"Voice samples extraction failed for {episode.title}: {e}")
+
+            # Merge SoulX format files from all segments if episode was segmented
+            if len(segment_files) > 1:
+                console.print(f"[blue]   → Merging {len(segment_files)} SoulX format files...[/blue]")
+                try:
+                    _merge_episode_soulx_files(episode_dir, len(segment_files))
+                    console.print(f"  [green]✓[/green] SoulX files merged successfully")
+                except Exception as e:
+                    console.print(f"  [yellow]⚠️  Failed to merge SoulX files: {e}[/yellow]")
+                    logger.warning(f"SoulX file merge failed for {episode.title}: {e}")
+
             processed_episodes.append({
                 'episode_title': episode.title,
                 'episode_description': episode.description,
@@ -1426,6 +1468,16 @@ def rss(
                 'segments_count': len(segment_files),
                 'pipeline_metadata': [meta.model_dump() for meta in all_pipeline_results],
             })
+
+            # Create episode summary JSON with all segments information
+            console.print(f"[blue]   → Creating episode summary...[/blue]")
+            try:
+                _create_episode_summary(episode_dir, episode, segment_files, all_pipeline_results)
+                console.print(f"  [green]✓[/green] Episode summary created")
+            except Exception as e:
+                console.print(f"  [yellow]⚠️  Failed to create episode summary: {e}[/yellow]")
+                logger.warning(f"Episode summary creation failed for {episode.title}: {e}")
+
             console.print(f"  [green]✓[/green] Processing complete")
         else:
             failed_processing.append({
@@ -1480,7 +1532,16 @@ def rss(
 
     # Display final summary
     console.print("\n" + "=" * 60)
-    console.print("[bold green]✨ RSS Processing Complete![/bold green]\n")
+    console.print("[bold green]✨ RSS Content Processing Complete![/bold green]\n")
+    console.print("[dim]📋 Each processed episode contains:[/dim]")
+    console.print("[dim]   • ASR transcription (asr_result.json)[/dim]")
+    console.print("[dim]   • Chinese translation (translation_result.json)[/dim]")
+    console.print("[dim]   • SoulX format JSON (soulx_format.json)[/dim]")
+    if not no_voice_samples:
+        console.print("[dim]   • Original voice samples (per segment)[/dim]")
+        console.print("[dim]   • Best voice samples for cloning (voice_samples_for_cloning/)[/dim]")
+        console.print("[dim]   • Audio files cache (voice_samples_for_cloning/cache/)[/dim]")
+    console.print()
 
     # Summary table
     table = Table(show_header=False, box=None)
@@ -1579,6 +1640,74 @@ def version() -> None:
             border_style="cyan",
         )
     )
+
+
+def _create_episode_summary(
+    episode_dir: Path,
+    episode,
+    segment_files: list[Path],
+    pipeline_results: list
+) -> None:
+    """Create episode summary JSON with all segments information.
+
+    Args:
+        episode_dir: Episode directory path
+        episode: Episode metadata object
+        segment_files: List of segment audio file paths
+        pipeline_results: List of pipeline metadata for each segment
+    """
+    import json
+    from datetime import datetime
+
+    # Calculate total duration from segment files
+    total_duration = 0
+    segment_info = []
+
+    for i, (segment_file, pipeline_meta) in enumerate(zip(segment_files, pipeline_results)):
+        # Get segment info from pipeline metadata
+        segment_id = f"{episode_dir.name}_part_{i+1:03d}"
+        segment_dir = episode_dir / segment_id
+
+        # Count speakers and segments from ASR result
+        asr_stage = pipeline_meta.get_stage("asr")
+        speaker_count = asr_stage.speakers if asr_stage else 0
+        segment_count = asr_stage.segments if asr_stage else 0
+
+        # Get file size
+        segment_size = segment_file.stat().st_size if segment_file.exists() else 0
+        total_duration += pipeline_meta.audio_duration or 0
+
+        segment_info.append({
+            "segment_id": segment_id,
+            "segment_index": i + 1,
+            "audio_file": segment_file.name,
+            "file_size": segment_size,
+            "duration": pipeline_meta.audio_duration,
+            "speakers": speaker_count,
+            "segments": segment_count,
+            "status": "completed"
+        })
+
+    # Create episode summary
+    episode_summary = {
+        "episode_id": episode_dir.name,
+        "title": episode.title,
+        "description": episode.description,
+        "audio_url": episode.audio_url,
+        "processing_time": datetime.now().isoformat(),
+        "total_segments": len(segment_files),
+        "total_duration": total_duration,
+        "total_size": sum(seg["file_size"] for seg in segment_info),
+        "segments": segment_info,
+        "processing_status": "completed" if len(segment_files) == len(pipeline_results) else "partial"
+    }
+
+    # Save to episode directory
+    summary_file = episode_dir / "episode_summary.json"
+    with open(summary_file, 'w', encoding='utf-8') as f:
+        json.dump(episode_summary, f, ensure_ascii=False, indent=2)
+
+    logger.info(f"Episode summary saved to {summary_file}")
 
 
 @app.callback()
