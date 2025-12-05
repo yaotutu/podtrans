@@ -56,7 +56,17 @@
       "Bash(conda run:*)",
       "Bash(/home/yaotutu/podtrans/soulx-podcast:*)",
       "Bash(/home/yaotutu/miniconda3/envs/podtrans/bin/pip list:*)",
-      "Bash(/home/yaotutu/miniconda3/envs/podtrans/bin/python:*)"
+      "Bash(/home/yaotutu/miniconda3/envs/podtrans/bin/python:*)",
+      "Bash(PYTHONPATH=src python3:*)",
+      "Bash(podtrans synthesize-simple:*)",
+      "Bash(for:*)",
+      "Bash(done:*)",
+      "Bash(/home/yaotutu/miniconda3/envs/podtrans/bin/podtrans synthesize-simple:*)",
+      "Bash(./scripts/test_cli_concurrency.sh:*)",
+      "Bash(kill:*)",
+      "Bash(/home/yaotutu/miniconda3/envs/podtrans/bin/podtrans rss:*)",
+      "Bash(curl:*)",
+      "Bash(pkill:*)"
     ],
     "deny": [],
     "ask": []
