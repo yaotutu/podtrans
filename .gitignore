@@ -81,6 +81,10 @@ data/output/*
 !data/output/.gitkeep
 data/cache/*
 !data/cache/.gitkeep
+data/rss_cache/*
+!data/rss_cache/.gitkeep
+data/rss_downloads/*
+!data/rss_downloads/.gitkeep
 
 # Baseline versions (keep in git for reference)
 !data/baseline/
@@ -119,3 +123,14 @@ credentials.json
 # Package manager lock files
 uv.lock
 condaenv.*.requirements.txt
+data/episodes.db
+data/baseline/README.md
+data/baseline/demo_v1_baseline/asr_result.json
+data/baseline/demo_v1_baseline/pipeline_metadata.json
+data/baseline/demo_v1_baseline/soulx_script.json
+data/baseline/demo_v1_baseline/transcript.txt
+data/baseline/demo_v1_baseline/translation_result.bilingual.txt
+data/baseline/demo_v1_baseline/translation_result.json
+data/baseline/demo_v1_baseline/translation_result.zh.txt
+data/cache/.gitkeep
+data/input/.gitkeep
