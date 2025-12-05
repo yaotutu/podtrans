@@ -1257,8 +1257,8 @@ def rss(
         console.print("[yellow]⚠️  No episodes found in RSS feed[/yellow]")
         raise typer.Exit(0)
 
-    # Download episodes
-    download_dir = settings.rss_download_dir / f"rss_{int(time.time())}"
+    # Download episodes to output directory directly
+    download_dir = output_dir
     downloader = AudioDownloader()
     downloaded_files = []
     failed_episodes = []
@@ -1279,23 +1279,8 @@ def rss(
         console.print("[bold red]❌ No episodes downloaded successfully[/bold red]")
         raise typer.Exit(1)
 
-    # Create cache directory for simple filenames
-    cache_dir = settings.rss_cache_dir / f"rss_{int(time.time())}"
-    cache_dir.mkdir(parents=True, exist_ok=True)
-
-    # Copy downloaded files to cache with simple names
-    cached_files = []
-    for i, downloaded_file in enumerate(downloaded_files):
-        # Create simple filename: episode_001.mp3, episode_002.mp3, etc.
-        simple_name = f"episode_{i+1:03d}.mp3"
-        cached_file = cache_dir / simple_name
-
-        # Copy file
-        import shutil
-        shutil.copy2(downloaded_file, cached_file)
-        cached_files.append(cached_file)
-
-        logger.info(f"Cached {downloaded_file} -> {cached_file}")
+    # Use downloaded files directly for processing
+    cached_files = downloaded_files
 
     # Apply audio segmentation if enabled
     final_processing_files = []
@@ -1316,7 +1301,7 @@ def rss(
 
             try:
                 # Create segment directory for this episode
-                episode_segment_dir = cache_dir / f"episode_{i+1:03d}_segments"
+                episode_segment_dir = output_dir / f"episode_{i+1:03d}_segments"
                 episode_segment_dir.mkdir(exist_ok=True)
 
                 # Split if needed
@@ -1617,14 +1602,7 @@ def rss(
             logger.warning(f"Audio merging failed: {e}")
 
     # Cleanup cache if not keeping downloads
-    if not keep_downloads:
-        try:
-            # Remove cache directory
-            import shutil
-            shutil.rmtree(cache_dir)
-            logger.info(f"Cleaned up cache directory: {cache_dir}")
-        except Exception as e:
-            logger.warning(f"Failed to clean up cache directory {cache_dir}: {e}")
+    # Note: No cache cleanup needed as files are now stored directly in output directory
 
     console.print("\n" + "=" * 60 + "\n")
 

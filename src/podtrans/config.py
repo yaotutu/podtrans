@@ -216,14 +216,6 @@ class Settings(BaseSettings):
     # ===================================
     # RSS Feed Configuration
     # ===================================
-    rss_download_dir: Path = Field(
-        default=Path("./data/rss_downloads"),
-        description="Directory for downloaded RSS episode audio files",
-    )
-    rss_cache_dir: Path = Field(
-        default=Path("./data/rss_cache"),
-        description="Directory for RSS feed cache and tracking data",
-    )
     rss_max_episode_age_days: int = Field(
         default=30,
         ge=1,
@@ -267,7 +259,7 @@ class Settings(BaseSettings):
         description="Maximum retries for API calls and downloads",
     )
 
-    @field_validator("output_dir", "log_dir", "rss_download_dir", "rss_cache_dir")
+    @field_validator("output_dir", "log_dir")
     @classmethod
     def create_dir_if_not_exists(cls, v: Path) -> Path:
         """Create directory if it doesn't exist."""
