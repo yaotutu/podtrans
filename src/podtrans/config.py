@@ -107,10 +107,10 @@ class Settings(BaseSettings):
         description="SoulX CLI model name",
     )
     soulx_cli_timeout: int = Field(
-        default=300,
+        default=10800,  # 3 hours
         ge=60,
-        le=3600,
-        description="SoulX CLI timeout in seconds",
+        le=21600,  # 6 hours max
+        description="SoulX CLI timeout in seconds (default: 10800 = 3 hours)",
     )
     soulx_cli_temperature: float = Field(
         default=0.7,
@@ -127,6 +127,26 @@ class Settings(BaseSettings):
     soulx_conda_env: str = Field(
         default="soulxpodcast",
         description="Conda environment name for SoulX CLI",
+    )
+
+    # ===================================
+    # Simple SoulX Configuration (New Simplified Version)
+    # ===================================
+    soulx_cli_script: str = Field(
+        default="soulx_cli.py",
+        description="Path to SoulX CLI Python script (simplified version)",
+    )
+    soulx_cli_working_dir: str = Field(
+        default=".",
+        description="Working directory for SoulX CLI execution",
+    )
+    soulx_cli_conda_env: str = Field(
+        default="soulxpodcast",
+        description="Conda environment name for SoulX CLI execution",
+    )
+    soulx_cli_model_path: str = Field(
+        default="/home/yaotutu/SoulX-Podcast-main/pretrained_models/SoulX-Podcast-1.7B",
+        description="Default model path for SoulX CLI execution",
     )
 
     # ===================================

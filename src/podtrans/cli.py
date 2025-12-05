@@ -18,7 +18,7 @@ from podtrans.config import get_settings
 from podtrans.models import PipelineMetadata, StageStatus
 from podtrans.translation import Translator
 from podtrans.translation.schemas import TranslationResult
-from podtrans.tts.factory import create_tts_service
+from podtrans.tts.factory import create_tts_service, create_simple_tts_service
 from podtrans.tts.schemas import SpeakerConfig
 from podtrans.utils.audio import get_audio_duration, validate_audio_file
 from podtrans.utils.file import read_json, write_json
@@ -1627,6 +1627,192 @@ def rss(
             logger.warning(f"Failed to clean up cache directory {cache_dir}: {e}")
 
     console.print("\n" + "=" * 60 + "\n")
+
+
+@app.command()
+def synthesize_simple(
+    input_json: Path = typer.Argument(
+        ...,
+        exists=True,
+        help="Path to SoulX format JSON file (user-provided format)",
+    ),
+    output: Path = typer.Option(
+        None,
+        "--output",
+        "-o",
+        help="Output WAV file path (default: same directory as input with .wav extension)",
+    ),
+    timeout: int = typer.Option(
+        None,
+        "--timeout",
+        "-t",
+        help="Timeout in seconds for CLI execution (default: from config)",
+    ),
+    working_dir: str = typer.Option(
+        None,
+        "--working-dir",
+        "-w",
+        help="Working directory for CLI execution (default: from config)",
+    ),
+    # Allow passing additional CLI parameters
+    cli_args: list[str] = typer.Option(
+        None,
+        "--cli-arg",
+        "-c",
+        help="Additional CLI arguments (format: --param=value or --flag)",
+    ),
+) -> None:
+    """Generate podcast audio using simplified SoulX CLI interface.
+
+    This is a simplified version that directly calls the SoulX CLI script
+    without complex data format conversion or environment management.
+
+    The user is responsible for providing the correct SoulX data format JSON file.
+
+    Examples:
+        # Basic usage
+        podtrans synthesize-simple soulx_data.json -o output.wav
+
+        # With custom timeout
+        podtrans synthesize-simple soulx_data.json -o output.wav --timeout 600
+
+        # With working directory
+        podtrans synthesize-simple soulx_data.json -o output.wav --working-dir /tmp
+
+        # With additional CLI arguments
+        podtrans synthesize-simple soulx_data.json -o output.wav --cli-arg --temperature=0.8 --cli-arg --model=custom
+
+    Note:
+        - User must provide JSON file in the exact format expected by SoulX CLI
+        - No data format conversion is performed
+        - No conda environment management is handled
+        - Simple error handling with direct status reporting
+    """
+    settings = get_settings()
+
+    # Display header
+    console.print("\n[bold blue]🎙️  PodTrans - Simple TTS Synthesis[/bold blue]\n")
+    console.print(f"[dim]Input JSON:[/dim] {input_json}")
+
+    # Determine output path
+    if output is None:
+        output_path = input_json.with_suffix('.wav')
+    else:
+        output_path = Path(output)
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    console.print(f"[dim]Output audio:[/dim] {output_path}")
+
+    # Set up parameters
+    service_timeout = timeout or settings.soulx_cli_timeout
+    service_working_dir = working_dir or settings.soulx_cli_working_dir
+
+    console.print(f"[dim]Timeout:[/dim] {service_timeout}s")
+    console.print(f"[dim]Working dir:[/dim] {service_working_dir}")
+
+    # Parse additional CLI arguments
+    cli_kwargs = {}
+    if cli_args:
+        console.print(f"[dim]Additional CLI args:[/dim] {cli_args}")
+        for arg in cli_args:
+            if arg.startswith('--') and '=' in arg:
+                # Format: --param=value
+                param, value = arg[2:].split('=', 1)
+                cli_kwargs[param.replace('-', '_')] = value
+            elif arg.startswith('--'):
+                # Format: --flag (boolean)
+                cli_kwargs[arg[2:].replace('-', '_')] = True
+
+    # Create simple service
+    console.print("\n[bold cyan]🚀 Initializing Simple SoulX Service...[/bold cyan]")
+
+    try:
+        simple_service = create_simple_tts_service()
+
+        # Override timeout/working_dir if provided
+        if timeout:
+            simple_service.timeout = service_timeout
+        if working_dir:
+            simple_service.working_dir = service_working_dir
+
+        # Override conda environment if provided (not exposed as CLI param for simplicity)
+        # Users can set it via .env file
+        if working_dir or timeout:
+            console.print(f"[green]✓[/green] Service parameters updated")
+
+        console.print("[green]✓[/green] Service initialized successfully")
+        console.print("[yellow]Note:[/yellow] User is responsible for providing correct SoulX data format")
+
+    except Exception as e:
+        console.print(f"[bold red]❌ Failed to initialize Simple SoulX Service: {e}[/bold red]")
+        logger.exception("Simple SoulX Service initialization error")
+        raise typer.Exit(1)
+
+    # Call SoulX CLI
+    console.print("\n[bold cyan]🚀 Calling SoulX CLI...[/bold cyan]")
+    console.print("[dim]This may take several minutes depending on content length...[/dim]\n")
+
+    try:
+        result = simple_service.call_cli(
+            input_json=str(input_json),
+            output_wav=str(output_path),
+            **cli_kwargs
+        )
+
+        # Display results
+        console.print("\n" + "=" * 60)
+
+        if result["success"]:
+            console.print("[bold green]✨ Synthesis Complete![/bold green]\n")
+
+            # Create summary table
+            table = Table(show_header=False, box=None)
+            table.add_column("Key", style="cyan")
+            table.add_column("Value", style="white")
+
+            table.add_row("Status", "[green]Success[/green]")
+            table.add_row("Output File", str(result["output_path"]))
+            table.add_row("Return Code", str(result["return_code"]))
+
+            # Check if output file exists and get info
+            if output_path.exists():
+                file_size = output_path.stat().st_size / (1024 * 1024)  # MB
+                table.add_row("File Size", f"{file_size:.2f} MB")
+
+            console.print(table)
+
+            if result.get("stdout"):
+                console.print(f"\n[dim]CLI Output:[/dim]")
+                console.print(f"[dim]{result['stdout'][:500]}{'...' if len(result['stdout']) > 500 else ''}[/dim]")
+
+        else:
+            console.print("[bold red]❌ Synthesis Failed[/bold red]\n")
+
+            # Create error summary table
+            table = Table(show_header=False, box=None)
+            table.add_column("Key", style="cyan")
+            table.add_column("Value", style="white")
+
+            table.add_row("Status", "[red]Failed[/red]")
+            table.add_row("Return Code", str(result["return_code"]))
+            table.add_row("Error", result["error"])
+
+            console.print(table)
+
+            if result.get("stderr"):
+                console.print(f"\n[bold]Error Details:[/bold]")
+                console.print(f"[red]{result['stderr'][:1000]}{'...' if len(result['stderr']) > 1000 else ''}[/red]")
+
+        console.print("\n" + "=" * 60 + "\n")
+
+    except KeyboardInterrupt:
+        console.print("\n[yellow]⚠️  Interrupted by user[/yellow]")
+        raise typer.Exit(1)
+
+    except Exception as e:
+        console.print(f"\n[bold red]❌ Unexpected error: {e}[/bold red]")
+        logger.exception("Simple TTS synthesis error")
+        raise typer.Exit(1)
 
 
 @app.command()
