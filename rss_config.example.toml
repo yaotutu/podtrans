@@ -1,0 +1,47 @@
+# RSS模块配置文件
+# 支持配置多个RSS源，设置下载模式和全局参数
+
+# ============================================
+# 全局设置
+# ============================================
+[global_settings]
+# 数据存储目录
+data_dir = "./data"
+
+# 最小文件大小（MB），小于此值视为下载失败
+min_file_size_mb = 1.0
+
+# 下载超时时间（秒）
+download_timeout = 300
+
+# 最大重试次数
+max_retries = 3
+
+
+# ============================================
+# RSS Feeds 配置
+# ============================================
+
+# 示例1：下载最新的3集
+[[rss_feeds]]
+name = "All-In Podcast"
+url = "https://feeds.simplecast.com/54nAGcIl"
+enabled = true
+download_mode = "latest"  # 可选值: "latest" 或 "all"
+download_count = 3        # 仅在 download_mode = "latest" 时有效
+
+# 示例2：下载全部剧集（已禁用）
+[[rss_feeds]]
+name = "Example Podcast"
+url = "https://example.com/feed.xml"
+enabled = false
+download_mode = "all"
+# download_count 在 mode="all" 时无效，可以省略或设为 null
+
+# 你可以继续添加更多RSS源
+# [[rss_feeds]]
+# name = "Another Podcast"
+# url = "https://another.example.com/rss"
+# enabled = true
+# download_mode = "latest"
+# download_count = 5

@@ -18,31 +18,42 @@ from datetime import datetime
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from .services.database import DatabaseManager
+from .rss_config import RSSFeedConfig, GlobalSettings
 
 
 class RSSProcessor:
     """RSS处理器 - 负责RSS feed的解析和音频下载"""
 
-    def __init__(self, data_dir: Path = Path("./data")):
+    def __init__(self, data_dir: Path = Path("./data"), global_settings: Optional[GlobalSettings] = None):
         self.data_dir = Path(data_dir)
         self.db_path = self.data_dir / "episodes.db"
         self.db = DatabaseManager(self.db_path)
+        self.global_settings = global_settings or GlobalSettings()
 
-    async def process_rss(self, rss_url: str) -> bool:
+    async def process_rss(
+        self,
+        rss_url: str,
+        download_mode: str = "latest",
+        download_count: Optional[int] = 1
+    ) -> bool:
         """
-        处理RSS feed，下载最新剧集
+        处理RSS feed，下载剧集
 
         Args:
             rss_url: RSS feed URL
+            download_mode: 下载模式 - "latest"(最新N集) 或 "all"(全部)
+            download_count: 下载数量，仅在download_mode="latest"时有效
 
         Returns:
             bool: 处理成功返回True
         """
         logger.info(f"开始处理RSS feed: {rss_url}")
+        logger.info(f"下载模式: {download_mode}, 数量: {download_count if download_mode == 'latest' else '全部'}")
 
         try:
             # 1. 获取RSS信息并解析
-            async with httpx.AsyncClient(timeout=30) as client:
+            timeout_value = self.global_settings.download_timeout
+            async with httpx.AsyncClient(timeout=timeout_value) as client:
                 response = await client.get(rss_url)
                 response.raise_for_status()
 
@@ -56,20 +67,58 @@ class RSSProcessor:
                 logger.error("RSS feed中没有找到剧集")
                 return False
 
-            # 获取最新剧集
-            latest_episode = feed.entries[0]
-            episode_title = latest_episode.get('title', 'Unknown Episode')
+            # 根据下载模式确定要处理的剧集
+            if download_mode == "all":
+                episodes_to_process = feed.entries
+                logger.info(f"下载模式: 全部 - 找到 {len(episodes_to_process)} 集")
+            else:  # latest
+                count = download_count or 1
+                episodes_to_process = feed.entries[:count]
+                logger.info(f"下载模式: 最新 {count} 集 - 找到 {len(episodes_to_process)} 集")
 
-            logger.info(f"找到最新剧集: {episode_title}")
-
-            # 2. 检查是否已经处理过
+            # 获取播客名称
             podcast_name = feed.feed.get('title', 'Unknown Feed')
+
+            # 处理每一集
+            success_count = 0
+            failed_count = 0
+
+            for idx, episode in enumerate(episodes_to_process, 1):
+                logger.info(f"处理剧集 {idx}/{len(episodes_to_process)}")
+                if await self._process_single_episode(episode, podcast_name):
+                    success_count += 1
+                else:
+                    failed_count += 1
+
+            logger.info(f"处理完成: 成功 {success_count}, 失败 {failed_count}")
+            return success_count > 0
+
+        except Exception as e:
+            logger.error(f"RSS处理异常: {e}")
+            return False
+
+    async def _process_single_episode(self, episode, podcast_name: str) -> bool:
+        """
+        处理单个剧集
+
+        Args:
+            episode: feedparser的episode对象
+            podcast_name: 播客名称
+
+        Returns:
+            bool: 处理成功返回True
+        """
+        try:
+            episode_title = episode.get('title', 'Unknown Episode')
+            logger.info(f"处理剧集: {episode_title}")
+
+            # 1. 检查是否已经处理过
             existing_episode = self.db.get_episode_by_title(episode_title, podcast_name)
             if existing_episode and existing_episode.get('download_completed'):
                 logger.info(f"剧集已存在且下载完成: {episode_title}")
                 return True
 
-            # 3. 创建固定的输出目录（基于播客名称）
+            # 2. 创建固定的输出目录（基于播客名称）
             podcast_name_clean = podcast_name.replace(' ', '_').replace('/', '_')
             episode_dir = self.data_dir / podcast_name_clean
             episode_dir.mkdir(parents=True, exist_ok=True)
@@ -78,16 +127,16 @@ class RSSProcessor:
             episode_title_clean = episode_title.replace(' ', '_').replace('/', '_').replace('?', '').replace('!', '').replace(':', '').replace('"', '').replace("'", "")
             audio_path = episode_dir / f"{episode_title_clean}.mp3"
 
-            # 4. 提取音频URL
+            # 3. 提取音频URL
             audio_url = ""
-            if latest_episode.get('enclosures'):
-                audio_url = latest_episode.enclosures[0].get('href', '')
+            if episode.get('enclosures'):
+                audio_url = episode.enclosures[0].get('href', '')
 
             if not audio_url:
-                logger.error("没有找到音频URL")
+                logger.error(f"剧集 {episode_title} 没有找到音频URL")
                 return False
 
-            # 5. 在数据库中创建记录
+            # 4. 在数据库中创建记录
             episode_id = self.db.create_episode(
                 podcast_name=podcast_name,
                 episode_title=episode_title,
@@ -95,8 +144,8 @@ class RSSProcessor:
                 episode_dir=str(episode_dir),
                 audio_url=audio_url,
                 audio_path=str(audio_path),
-                publication_date=latest_episode.get('published', ''),
-                description=latest_episode.get('description', ''),
+                publication_date=episode.get('published', ''),
+                description=episode.get('description', ''),
                 duration=0
             )
 
@@ -104,16 +153,17 @@ class RSSProcessor:
                 logger.error("创建数据库记录失败")
                 return False
 
-            # 6. 下载音频文件
+            # 5. 下载音频文件
             logger.info(f"开始下载音频: {audio_url}")
 
             # 检查文件是否已经存在
+            min_file_size = int(self.global_settings.min_file_size_mb * 1024 * 1024)
             if audio_path.exists():
                 file_size = audio_path.stat().st_size
                 logger.info(f"音频文件已存在: {audio_path} ({file_size} bytes)")
 
                 # 验证文件完整性
-                if file_size >= 1024 * 1024:  # 至少1MB
+                if file_size >= min_file_size:
                     # 更新数据库状态
                     self.db.update_episode_status(episode_id, {
                         'file_size': file_size,
@@ -127,7 +177,8 @@ class RSSProcessor:
                     audio_path.unlink()
 
             try:
-                async with httpx.AsyncClient(timeout=300, follow_redirects=True) as client:
+                timeout_value = self.global_settings.download_timeout
+                async with httpx.AsyncClient(timeout=timeout_value, follow_redirects=True) as client:
                     response = await client.get(audio_url)
                     response.raise_for_status()
 
@@ -138,8 +189,8 @@ class RSSProcessor:
                     file_size = len(response.content)
                     logger.info(f"音频下载完成，文件大小: {file_size} bytes")
 
-                    # 验证文件完整性（至少1MB）
-                    if file_size < 1024 * 1024:  # 1MB
+                    # 验证文件完整性
+                    if file_size < min_file_size:
                         logger.error(f"音频文件太小，可能下载失败: {file_size} bytes")
                         audio_path.unlink()  # 删除损坏的文件
                         self.db.update_episode_status(episode_id, {
@@ -171,7 +222,7 @@ class RSSProcessor:
                 return False
 
         except Exception as e:
-            logger.error(f"RSS处理异常: {e}")
+            logger.error(f"剧集处理异常: {e}")
             return False
 
     def get_status(self) -> dict:
@@ -187,23 +238,48 @@ class RSSProcessor:
 
 
 # RSS模块接口 - 提供给外层的简单接口
-def create_rss_processor(data_dir: str = "./data") -> RSSProcessor:
+def create_rss_processor(data_dir: str = "./data", global_settings: Optional[GlobalSettings] = None) -> RSSProcessor:
     """创建RSS处理器"""
-    return RSSProcessor(Path(data_dir))
+    return RSSProcessor(Path(data_dir), global_settings)
 
 
-async def start_rss_processing(rss_url: str, data_dir: str = "./data") -> bool:
+async def start_rss_processing(
+    rss_url: str = None,
+    data_dir: str = "./data",
+    config_path: str = "./rss_config.toml",
+    download_mode: str = "latest",
+    download_count: int = 1
+) -> bool:
     """
     启动RSS处理 - 主要接口函数
 
     Args:
-        rss_url: RSS feed URL
+        rss_url: RSS feed URL (如果提供，则忽略配置文件中的feeds)
         data_dir: 数据目录路径
+        config_path: 配置文件路径
+        download_mode: 下载模式 - "latest" 或 "all"
+        download_count: 下载数量
 
     Returns:
         bool: 处理成功返回True
     """
-    processor = create_rss_processor(data_dir)
+    from .rss_config import load_rss_config
+
+    # 加载配置
+    try:
+        config = load_rss_config(Path(config_path))
+        logger.info(f"配置文件加载成功: {config_path}")
+    except Exception as e:
+        logger.warning(f"配置文件加载失败，使用默认配置: {e}")
+        from .rss_config import RSSConfig
+        config = RSSConfig()
+
+    # 使用配置中的全局设置
+    global_settings = config.global_settings
+    actual_data_dir = data_dir if data_dir != "./data" else global_settings.data_dir
+
+    # 创建处理器
+    processor = create_rss_processor(actual_data_dir, global_settings)
 
     # 显示服务状态
     status = processor.get_status()
@@ -212,18 +288,58 @@ async def start_rss_processing(rss_url: str, data_dir: str = "./data") -> bool:
     logger.info(f"数据库: {status['database_path']}")
     logger.info(f"当前状态: {status}")
 
-    # 处理RSS
-    result = await processor.process_rss(rss_url)
+    # 确定要处理的feeds
+    feeds_to_process = []
 
-    if result:
-        logger.info("RSS处理完成")
-        # 显示更新后的状态
-        final_status = processor.get_status()
-        logger.info(f"最终状态: {final_status}")
+    if rss_url:
+        # 命令行指定了URL，使用命令行参数
+        logger.info(f"使用命令行参数: {rss_url}")
+        feeds_to_process.append({
+            'url': rss_url,
+            'download_mode': download_mode,
+            'download_count': download_count
+        })
     else:
-        logger.error("RSS处理失败")
+        # 使用配置文件中的feeds
+        enabled_feeds = config.get_enabled_feeds()
+        if not enabled_feeds:
+            logger.error("配置文件中没有启用的RSS feeds")
+            return False
 
-    return result
+        logger.info(f"从配置文件读取到 {len(enabled_feeds)} 个启用的feeds")
+        for feed_config in enabled_feeds:
+            feeds_to_process.append({
+                'url': feed_config.url,
+                'download_mode': feed_config.download_mode,
+                'download_count': feed_config.download_count,
+                'name': feed_config.name
+            })
+
+    # 处理所有feeds
+    all_success = True
+    for feed_info in feeds_to_process:
+        feed_url = feed_info['url']
+        feed_name = feed_info.get('name', feed_url)
+        mode = feed_info['download_mode']
+        count = feed_info['download_count']
+
+        logger.info(f"\n处理 feed: {feed_name}")
+        logger.info(f"URL: {feed_url}")
+        logger.info(f"模式: {mode}, 数量: {count if mode == 'latest' else '全部'}")
+
+        result = await processor.process_rss(feed_url, mode, count)
+
+        if not result:
+            all_success = False
+            logger.error(f"Feed 处理失败: {feed_name}")
+        else:
+            logger.info(f"Feed 处理成功: {feed_name}")
+
+    # 显示最终状态
+    final_status = processor.get_status()
+    logger.info(f"\n最终状态: {final_status}")
+
+    return all_success
 
 
 def get_rss_status(data_dir: str = "./data") -> dict:
