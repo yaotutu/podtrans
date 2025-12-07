@@ -5,6 +5,7 @@ This module provides the CLI commands using Typer.
 
 from pathlib import Path
 import asyncio
+from datetime import datetime
 
 import typer
 from loguru import logger
@@ -30,212 +31,6 @@ app = typer.Typer(
     add_completion=False,
 )
 console = Console()
-
-
-@app.command()
-def transcribe(
-    audio: Path = typer.Argument(
-        ...,
-        exists=True,
-        help="Path to audio file (mp3, wav, flac, m4a)",
-    ),
-    output: Path | None = typer.Option(
-        None,
-        "--output",
-        "-o",
-        help="Output directory (default: data/output/{audio_name})",
-    ),
-    language: str | None = typer.Option(
-        None,
-        "--language",
-        "-l",
-        help="Language code (e.g., 'en', 'zh'). Auto-detect if not specified",
-    ),
-    model: str | None = typer.Option(
-        None,
-        "--model",
-        "-m",
-        help="Whisper model name (tiny, base, small, medium, large-v2, large-v3)",
-    ),
-    device: str | None = typer.Option(
-        None,
-        "--device",
-        "-d",
-        help="Device to use (cuda, mps, cpu)",
-    ),
-    no_diarization: bool = typer.Option(
-        False,
-        "--no-diarization",
-        help="Disable speaker diarization",
-    ),
-) -> None:
-    """Transcribe audio file with speaker diarization.
-
-    This command performs:
-    - Automatic Speech Recognition (ASR)
-    - Word-level timestamp alignment
-    - Speaker diarization (optional)
-
-    Example:
-        podtrans transcribe data/input/demo.mp3
-
-        podtrans transcribe podcast.mp3 -o ./results -l en
-
-        podtrans transcribe podcast.mp3 --no-diarization
-    """
-    settings = get_settings()
-
-    # Validate audio file
-    console.print("\n[bold blue]🎙️  PodTrans - Audio Transcription[/bold blue]\n")
-    console.print(f"[dim]Audio file:[/dim] {audio}")
-
-    if not validate_audio_file(audio):
-        console.print("[bold red]❌ Invalid audio file[/bold red]")
-        raise typer.Exit(1)
-
-    # Get audio info
-    try:
-        duration = get_audio_duration(audio)
-        duration_min = duration / 60
-        console.print(
-            f"[dim]Duration:[/dim] {duration:.2f} seconds ({duration_min:.2f} minutes)"
-        )
-    except Exception as e:
-        console.print(f"[yellow]⚠️  Could not get audio duration: {e}[/yellow]")
-        duration = 0
-
-    # Determine output directory
-    if output is None:
-        audio_name = audio.stem
-        output_dir = settings.output_dir / audio_name
-    else:
-        output_dir = Path(output)
-
-    output_dir.mkdir(parents=True, exist_ok=True)
-    console.print(f"[dim]Output directory:[/dim] {output_dir}\n")
-
-    # Initialize pipeline metadata
-    pipeline_meta = PipelineMetadata(
-        audio_file=str(audio),
-        output_dir=output_dir,
-    )
-
-    # Initialize WhisperX
-    console.print("[bold cyan]📝 Initializing WhisperX...[/bold cyan]")
-    try:
-        handler = WhisperXHandler(
-            model_name=model,
-            device=device,
-        )
-        console.print(f"[green]✓[/green] Model: {handler.model_name}")
-        console.print(f"[green]✓[/green] Device: {handler.device}")
-        console.print(f"[green]✓[/green] Compute type: {handler.compute_type}\n")
-    except Exception as e:
-        console.print(f"[bold red]❌ Failed to initialize WhisperX: {e}[/bold red]")
-        pipeline_meta.update_stage("asr", StageStatus.FAILED, error=str(e))
-        write_json(
-            pipeline_meta.model_dump(),
-            output_dir / "pipeline_metadata.json",
-        )
-        raise typer.Exit(1)
-
-    # Run ASR pipeline
-    console.print("[bold cyan]🚀 Starting ASR pipeline...[/bold cyan]\n")
-    pipeline_meta.update_stage("asr", StageStatus.RUNNING)
-
-    try:
-        # Run full pipeline
-        asr_result = handler.process_full_pipeline(
-            audio_path=audio,
-            language=language,
-            enable_diarization=not no_diarization,
-        )
-
-        # Mark as success
-        pipeline_meta.update_stage(
-            "asr",
-            StageStatus.SUCCESS,
-            segments=asr_result.total_segments,
-            speakers=asr_result.speaker_count,
-            language=asr_result.language,
-        )
-
-        # Save results
-        console.print("\n[bold cyan]💾 Saving results...[/bold cyan]")
-
-        # Save ASR result
-        asr_output_file = output_dir / "asr_result.json"
-        write_json(asr_result.model_dump(), asr_output_file)
-        console.print(f"[green]✓[/green] ASR result: {asr_output_file}")
-
-        # Save transcript as plain text
-        transcript_file = output_dir / "transcript.txt"
-        transcript_file.write_text(asr_result.to_text(include_speakers=True))
-        console.print(f"[green]✓[/green] Transcript: {transcript_file}")
-
-        # Save pipeline metadata
-        metadata_file = output_dir / "pipeline_metadata.json"
-        write_json(pipeline_meta.model_dump(), metadata_file)
-        console.print(f"[green]✓[/green] Metadata: {metadata_file}")
-
-        # Display summary
-        console.print("\n" + "=" * 60)
-        console.print("[bold green]✨ Transcription Complete![/bold green]\n")
-
-        # Create summary table
-        table = Table(show_header=False, box=None)
-        table.add_column("Key", style="cyan")
-        table.add_column("Value", style="white")
-
-        table.add_row("Language", asr_result.language.upper())
-        table.add_row("Segments", str(asr_result.total_segments))
-        table.add_row("Speakers", str(asr_result.speaker_count))
-        table.add_row(
-            "Duration",
-            f"{pipeline_meta.total_duration_seconds:.2f}s"
-            if pipeline_meta.total_duration_seconds
-            else "N/A",
-        )
-        table.add_row("Output", str(output_dir))
-
-        console.print(table)
-        console.print("\n" + "=" * 60 + "\n")
-
-        # Show first few segments as preview
-        if asr_result.segments:
-            console.print("[bold]📄 Preview (first 3 segments):[/bold]\n")
-            for seg in asr_result.segments[:3]:
-                speaker_label = f"[{seg.speaker}]" if seg.speaker else "[Unknown]"
-                console.print(
-                    f"[dim]{seg.start:.2f}s - {seg.end:.2f}s[/dim] "
-                    f"[cyan]{speaker_label}[/cyan] {seg.text}"
-                )
-            if len(asr_result.segments) > 3:
-                remaining = len(asr_result.segments) - 3
-                console.print(f"\n[dim]... and {remaining} more segments[/dim]")
-
-        console.print()
-
-    except KeyboardInterrupt:
-        console.print("\n[yellow]⚠️  Interrupted by user[/yellow]")
-        pipeline_meta.update_stage(
-            "asr", StageStatus.FAILED, error="Interrupted by user"
-        )
-        write_json(
-            pipeline_meta.model_dump(),
-            output_dir / "pipeline_metadata.json",
-        )
-        raise typer.Exit(1)
-
-    except Exception as e:
-        console.print(f"\n[bold red]❌ Transcription failed: {e}[/bold red]")
-        logger.exception("Transcription error")
-        pipeline_meta.update_stage("asr", StageStatus.FAILED, error=str(e))
-        write_json(
-            pipeline_meta.model_dump(),
-            output_dir / "pipeline_metadata.json",
-        )
-        raise typer.Exit(1)
 
 
 @app.command()
@@ -641,1155 +436,93 @@ def synthesize(
 
 
 @app.command()
-def pipeline(
-    audio: Path = typer.Argument(
-        ...,
-        exists=True,
-        help="Path to audio file (mp3, wav, flac, m4a)",
-    ),
-    output: Path | None = typer.Option(
-        None,
-        "--output",
-        "-o",
-        help="Output directory (default: data/output/{audio_name})",
-    ),
-    language: str | None = typer.Option(
-        None,
-        "--language",
-        "-l",
-        help="Language code for ASR (e.g., 'en', 'zh'). Auto-detect if not specified",
-    ),
-    source_lang: str = typer.Option(
-        "en",
-        "--source",
-        "-s",
-        help="Source language for translation",
-    ),
-    target_lang: str = typer.Option(
-        "zh",
-        "--target",
-        "-t",
-        help="Target language for translation",
-    ),
-    no_diarization: bool = typer.Option(
-        False,
-        "--no-diarization",
-        help="Disable speaker diarization",
-    ),
-    no_voice_samples: bool = typer.Option(
-        False,
-        "--no-voice-samples",
-        help="Disable voice sample extraction",
-    ),
-    min_sample_duration: float | None = typer.Option(
-        None,
-        "--min-sample-duration",
-        help="Minimum voice sample duration in seconds (default: from config)",
-    ),
-    max_sample_duration: float | None = typer.Option(
-        None,
-        "--max-sample-duration",
-        help="Maximum voice sample duration in seconds (default: from config)",
-    ),
-    min_sample_quality: float | None = typer.Option(
-        None,
-        "--min-sample-quality",
-        help="Minimum voice sample quality score (0-100, default: from config)",
-    ),
-) -> None:
-    """Run complete podcast translation pipeline (ASR → Voice Samples → Translation → TTS).
-
-    This command orchestrates all stages in sequence:
-    1. Transcribe audio with speaker diarization
-    2. Extract voice cloning samples for each speaker (NEW!)
-    3. Translate transcriptions to target language
-    4. Generate synthesized podcast audio
-
-    Voice samples are extracted automatically and saved in voice_samples/ subdirectory.
-    Each speaker gets one high-quality sample optimized for voice cloning.
-
-    This is the recommended way to process podcasts end-to-end.
-
-    Example:
-        podtrans pipeline data/input/demo.mp3
-
-        podtrans pipeline podcast.mp3 -o ./results -l en -s en -t zh
-
-        podtrans pipeline episode.mp3 --no-diarization --no-voice-samples
-
-        podtrans pipeline podcast.mp3 --min-sample-quality 75 --min-sample-duration 8
-    """
-    settings = get_settings()
-
-    # Validate audio file
-    console.print("\n[bold blue]🎙️  PodTrans - Complete Pipeline[/bold blue]\n")
-    console.print(f"[dim]Audio file:[/dim] {audio}")
-
-    if not validate_audio_file(audio):
-        console.print("[bold red]❌ Invalid audio file[/bold red]")
-        raise typer.Exit(1)
-
-    # Get audio info
-    try:
-        duration = get_audio_duration(audio)
-        duration_min = duration / 60
-        console.print(
-            f"[dim]Duration:[/dim] {duration:.2f} seconds ({duration_min:.2f} minutes)"
-        )
-    except Exception as e:
-        console.print(f"[yellow]⚠️  Could not get audio duration: {e}[/yellow]")
-        duration = 0
-
-    # Determine output directory
-    if output is None:
-        audio_name = audio.stem
-        output_dir = settings.output_dir / audio_name
-    else:
-        output_dir = Path(output)
-
-    output_dir.mkdir(parents=True, exist_ok=True)
-    console.print(f"[dim]Output directory:[/dim] {output_dir}\n")
-
-    # Create and run Pipeline orchestrator
-    console.print("[bold cyan]🔄 Starting complete pipeline...[/bold cyan]\n")
-
-    try:
-        orchestrator = PipelineOrchestrator(output_dir)
-        pipeline_meta = asyncio.run(
-            orchestrator.run_pipeline(
-                audio_path=audio,
-                language=language,
-                enable_diarization=not no_diarization,
-                source_lang=source_lang,
-                target_lang=target_lang,
-                extract_voice_samples=False
-                if no_voice_samples
-                else None,  # Use config default if not disabled
-                min_duration=min_sample_duration,
-                max_duration=max_sample_duration,
-                min_quality=min_sample_quality,
-            )
-        )
-
-        # Display final results
-        console.print("\n" + "=" * 60)
-        console.print("[bold green]✨ Pipeline Complete![/bold green]\n")
-
-        table = Table(show_header=False, box=None)
-        table.add_column("Key", style="cyan")
-        table.add_column("Value", style="white")
-
-        table.add_row("Total Duration", f"{pipeline_meta.total_duration_seconds:.2f}s")
-        table.add_row("Final Status", pipeline_meta.final_status.value)
-
-        # Display stage status
-        for stage in pipeline_meta.stages:
-            status_icon = {
-                StageStatus.SUCCESS: "✓",
-                StageStatus.FAILED: "✗",
-                StageStatus.RUNNING: "⏳",
-                StageStatus.PENDING: "⏸️",
-            }.get(stage.status, "?")
-
-            table.add_row(f"Stage: {stage.name}", f"{status_icon} {stage.status.value}")
-            if stage.duration_seconds:
-                table.add_row(f"  Duration", f"{stage.duration_seconds:.2f}s")
-
-        console.print(table)
-
-        # Display voice samples information
-        voice_samples_stage = pipeline_meta.get_stage("voice_samples")
-        if voice_samples_stage and voice_samples_stage.status == StageStatus.SUCCESS:
-            voice_samples_dir = output_dir / "voice_samples"
-            if voice_samples_dir.exists():
-                console.print("\n[bold]🎤 Voice Samples Extracted:[/bold]")
-
-                # Count samples
-                speaker_dirs = [
-                    d
-                    for d in voice_samples_dir.iterdir()
-                    if d.is_dir() and d.name.startswith("SPEAKER_")
-                ]
-
-                samples_table = Table(show_header=True, box=None)
-                samples_table.add_column("Speaker", style="cyan")
-                samples_table.add_column("Audio File", style="green")
-                samples_table.add_column("Duration", style="yellow")
-
-                for speaker_dir in sorted(speaker_dirs):
-                    audio_file = speaker_dir / "voice_sample.wav"
-                    metadata_file = speaker_dir / "voice_sample.txt"
-
-                    if audio_file.exists():
-                        # Try to get duration from the file
-                        try:
-                            size_mb = audio_file.stat().st_size / (1024 * 1024)
-                            duration_str = f"{size_mb:.1f} MB"
-
-                            # Try to extract duration from metadata file
-                            if metadata_file.exists():
-                                with open(metadata_file, "r", encoding="utf-8") as f:
-                                    content = f.read()
-                                    for line in content.split("\n"):
-                                        if "时长:" in line:
-                                            duration_str = line.split("时长:")[
-                                                1
-                                            ].strip()
-                                            break
-
-                            samples_table.add_row(
-                                speaker_dir.name, "voice_sample.wav", duration_str
-                            )
-                        except Exception:
-                            samples_table.add_row(
-                                speaker_dir.name, "voice_sample.wav", "N/A"
-                            )
-
-                console.print(samples_table)
-                console.print(
-                    f"[dim]Location: {voice_samples_dir.relative_to(Path.cwd())}[/dim]"
-                )
-
-        # Display output files
-        console.print("\n[bold]📁 Generated Files:[/bold]")
-        files_table = Table(show_header=True, box=None)
-        files_table.add_column("File", style="cyan")
-        files_table.add_column("Size", style="yellow")
-
-        for file_path in output_dir.glob("*"):
-            if file_path.is_file():
-                size_mb = file_path.stat().st_size / (1024 * 1024)
-                files_table.add_row(file_path.name, f"{size_mb:.2f} MB")
-
-        console.print(files_table)
-        console.print("\n" + "=" * 60 + "\n")
-
-    except KeyboardInterrupt:
-        console.print("\n[yellow]⚠️  Pipeline interrupted by user[/yellow]")
-        raise typer.Exit(1)
-
-    except Exception as e:
-        console.print(f"\n[bold red]❌ Pipeline failed: {e}[/bold red]")
-        logger.exception("Pipeline error")
-        raise typer.Exit(1)
-
-
-@app.command()
-def extract_samples(
-    audio_file: Path = typer.Argument(
-        ...,
-        exists=True,
-        help="Path to input audio file (mp3, wav, flac, m4a)",
-    ),
-    asr_result: Path = typer.Argument(
-        ...,
-        exists=True,
-        help="Path to ASR result JSON file",
-    ),
-    output_dir: Path = typer.Option(
-        Path("./voice_samples"),
-        "--output",
-        "-o",
-        help="Output directory for voice samples (default: ./voice_samples)",
-    ),
-    min_duration: float = typer.Option(
-        5.0,
-        "--min-duration",
-        help="Minimum sample duration in seconds (default: 5.0)",
-    ),
-    max_duration: float = typer.Option(
-        20.0,
-        "--max-duration",
-        help="Maximum sample duration in seconds (default: 20.0)",
-    ),
-    min_quality: float = typer.Option(
-        60.0,
-        "--min-quality",
-        help="Minimum quality score (0-100, default: 60.0)",
-    ),
-) -> None:
-    """Extract voice cloning samples from ASR results.
-
-    This command extracts the highest quality voice sample for each speaker
-    from ASR results, optimized for voice cloning applications.
-
-    For each speaker, it outputs:
-    - WAV audio file (5-20 seconds, highest quality sample)
-    - Detailed metadata text file with transcription and quality metrics
-
-    Output structure:
-        voice_samples/
-        ├── SPEAKER_00/
-        │   ├── voice_sample.wav    # Best audio sample
-        │   └── voice_sample.txt    # Detailed description
-        └── SPEAKER_01/
-            ├── voice_sample.wav
-            └── voice_sample.txt
-
-    Example:
-        podtrans extract-samples podcast.mp3 data/output/demo/asr_result.json
-
-        podtrans extract-samples podcast.mp3 asr_result.json -o my_samples --min-quality 75
-
-        podtrans extract-samples podcast.mp3 asr_result.json --min-duration 8 --max-duration 15
-    """
-    console.print("\n[bold blue]🎙️  PodTrans - Voice Sample Extraction[/bold blue]\n")
-    console.print(f"[dim]Audio file:[/dim] {audio_file}")
-    console.print(f"[dim]ASR result:[/dim] {asr_result}")
-    console.print(f"[dim]Output directory:[/dim] {output_dir}")
-    console.print(f"[dim]Duration range:[/dim] {min_duration}s - {max_duration}s")
-    console.print(f"[dim]Min quality score:[/dim] {min_quality}\n")
-
-    try:
-        # Validate audio file
-        if not validate_audio_file(audio_file):
-            console.print("[bold red]❌ Invalid audio file[/bold red]")
-            raise typer.Exit(1)
-
-        # Load ASR result
-        console.print("[dim]Loading ASR result...[/dim]")
-        try:
-            asr_data = read_json(asr_result)
-            asr_result_obj = ASRResult.model_validate(asr_data)
-        except Exception as e:
-            console.print(f"[bold red]❌ Failed to load ASR result: {e}[/bold red]")
-            raise typer.Exit(1)
-
-        console.print(
-            f"[green]✓[/green] ASR result loaded: {asr_result_obj.total_segments} segments, {asr_result_obj.speaker_count} speakers"
-        )
-
-        # Check if speaker diarization was performed
-        if asr_result_obj.speaker_count == 0:
-            console.print(
-                "[yellow]⚠️  No speaker diarization found in ASR result[/yellow]"
-            )
-            console.print(
-                "[yellow]   Voice samples will not be extracted without speaker labels[/yellow]"
-            )
-            raise typer.Exit(1)
-
-        # Initialize WhisperX handler
-        console.print("[dim]Initializing audio processor...[/dim]")
-        handler = WhisperXHandler()
-
-        # Extract voice samples
-        console.print("[dim]Extracting voice samples...[/dim]")
-        extraction_result = handler.extract_voice_samples(
-            audio_path=audio_file,
-            asr_result=asr_result_obj,
-            min_duration=min_duration,
-            max_duration=max_duration,
-            min_quality=min_quality,
-        )
-
-        # Display results
-        console.print("\n" + "=" * 60)
-        console.print("[bold green]✨ Voice Sample Extraction Complete![/bold green]\n")
-
-        # Summary table
-        table = Table(
-            title="Extraction Summary", show_header=True, header_style="bold cyan"
-        )
-        table.add_column("Metric", style="cyan")
-        table.add_column("Value", style="white")
-
-        table.add_row("Total Speakers", str(extraction_result.total_speakers))
-        table.add_row("Samples Extracted", str(extraction_result.total_samples))
-        table.add_row(
-            "Success Rate",
-            f"{extraction_result.extraction_summary['success_rate']:.1%}",
-        )
-        table.add_row(
-            "Average Quality",
-            f"{extraction_result.extraction_summary['average_quality']:.1f}/100",
-        )
-        table.add_row(
-            "Average Duration",
-            f"{extraction_result.extraction_summary['average_duration']:.1f}s",
-        )
-
-        console.print(table)
-
-        if extraction_result.speaker_samples:
-            console.print("\n[bold]Extracted Samples:[/bold]\n")
-
-            # Samples table
-            samples_table = Table(show_header=True, header_style="bold cyan")
-            samples_table.add_column("Speaker", style="cyan")
-            samples_table.add_column("Quality", style="green")
-            samples_table.add_column("Duration", style="yellow")
-            samples_table.add_column("Words", style="white")
-            samples_table.add_column("Recommendation", style="magenta")
-
-            for speaker_id, sample in extraction_result.speaker_samples.items():
-                quality_color = (
-                    "green"
-                    if sample.quality_score >= 80
-                    else "yellow"
-                    if sample.quality_score >= 60
-                    else "red"
-                )
-                samples_table.add_row(
-                    speaker_id,
-                    f"[{quality_color}]{sample.quality_score:.0f}/100[/{quality_color}]",
-                    f"{sample.duration:.1f}s",
-                    str(sample.words_count),
-                    sample.recommended_use[:30] + "..."
-                    if len(sample.recommended_use) > 30
-                    else sample.recommended_use,
-                )
-
-            console.print(samples_table)
-
-            console.print(f"\n[bold]Output Directory:[/bold] {output_dir.absolute()}")
-            console.print("[dim]Each speaker folder contains:[/dim]")
-            console.print("[dim]  • voice_sample.wav - Audio file[/dim]")
-            console.print("[dim]  • voice_sample.txt - Detailed metadata[/dim]")
-
-        else:
-            console.print("[yellow]⚠️  No voice samples extracted[/yellow]")
-            console.print(
-                "[yellow]   Try adjusting the quality thresholds or duration limits[/yellow]"
-            )
-
-        # Save extraction summary
-        summary_file = output_dir / "extraction_summary.json"
-        extraction_summary = {
-            "extraction_time": extraction_result.extraction_time.isoformat(),
-            "source_audio": str(audio_file),
-            "source_asr_result": str(asr_result),
-            "parameters": {
-                "min_duration": min_duration,
-                "max_duration": max_duration,
-                "min_quality": min_quality,
-            },
-            "summary": extraction_result.extraction_summary,
-            "samples": {
-                speaker_id: {
-                    "quality_score": sample.quality_score,
-                    "duration": sample.duration,
-                    "words_count": sample.words_count,
-                    "recommended_use": sample.recommended_use,
-                    "audio_path": str(sample.audio_path),
-                }
-                for speaker_id, sample in extraction_result.speaker_samples.items()
-            },
-        }
-
-        try:
-            write_json(extraction_summary, summary_file, indent=2)
-            console.print(
-                f"[green]✓[/green] Extraction summary saved to: {summary_file}"
-            )
-        except Exception as e:
-            console.print(f"[yellow]⚠️  Failed to save summary: {e}[/yellow]")
-
-        console.print("\n" + "=" * 60 + "\n")
-        console.print(
-            "[bold green]Voice samples are ready for cloning! 🎤[/bold green]"
-        )
-
-    except KeyboardInterrupt:
-        console.print("\n[yellow]⚠️  Extraction interrupted by user[/yellow]")
-        raise typer.Exit(1)
-
-    except Exception as e:
-        console.print(f"\n[bold red]❌ Voice sample extraction failed: {e}[/bold red]")
-        logger.exception("Voice sample extraction error")
-        raise typer.Exit(1)
-
-
-@app.command()
 def rss(
     rss_url: str = typer.Argument(
-        ...,
-        help="RSS feed URL to fetch podcast episodes from",
+        None,
+        help="RSS feed URL (optional if using config file)",
+    ),
+    data_dir: Path = typer.Option(
+        Path("./data"),
+        "--data-dir",
+        "-d",
+        help="Data directory path",
+    ),
+    config: Path = typer.Option(
+        Path("./rss_config.toml"),
+        "--config",
+        "-c",
+        help="RSS config file path",
+    ),
+    mode: str = typer.Option(
+        "latest",
+        "--mode",
+        "-m",
+        help="Download mode: 'latest' or 'all'",
     ),
     count: int = typer.Option(
         1,
         "--count",
-        "-c",
-        help="Number of latest episodes to download (default: 1)",
-    ),
-    output: Path | None = typer.Option(
-        None,
-        "--output",
-        "-o",
-        help="Output directory (default: data/output/rss_{timestamp})",
-    ),
-    language: str | None = typer.Option(
-        None,
-        "--language",
-        "-l",
-        help="Language code for ASR (e.g., 'en', 'zh'). Auto-detect if not specified",
-    ),
-    source_lang: str = typer.Option(
-        "en",
-        "--source",
-        "-s",
-        help="Source language for translation",
-    ),
-    target_lang: str = typer.Option(
-        "zh",
-        "--target",
-        "-t",
-        help="Target language for translation",
-    ),
-    no_diarization: bool = typer.Option(
-        False,
-        "--no-diarization",
-        help="Disable speaker diarization",
-    ),
-    no_voice_samples: bool = typer.Option(
-        False,
-        "--no-voice-samples",
-        help="Disable voice sample extraction",
-    ),
-    keep_downloads: bool = typer.Option(
-        False,
-        "--keep-downloads",
-        help="Keep downloaded audio files after processing",
-    ),
-    max_segment_duration: float | None = typer.Option(
-        None,
-        "--max-segment-duration",
-        help="Maximum duration per audio segment in seconds (default: from config)",
-    ),
-    no_segmentation: bool = typer.Option(
-        False,
-        "--no-segmentation",
-        help="Disable automatic audio segmentation for long episodes",
-    ),
-    min_sample_duration: float | None = typer.Option(
-        None,
-        "--min-sample-duration",
-        help="Minimum voice sample duration in seconds (default: from config)",
-    ),
-    max_sample_duration: float | None = typer.Option(
-        None,
-        "--max-sample-duration",
-        help="Maximum voice sample duration in seconds (default: from config)",
-    ),
-    min_sample_quality: float | None = typer.Option(
-        None,
-        "--min-sample-quality",
-        help="Minimum voice sample quality score (0-100, default: from config)",
+        "-n",
+        help="Number of episodes to download (for 'latest' mode)",
     ),
 ) -> None:
-    """Fetch and process podcast episodes from RSS feeds.
+    """Download podcast episodes from RSS feeds.
 
-    This command automates the podcast content processing workflow:
-    1. Parse RSS feed and fetch episode information
-    2. Download audio files for latest episodes
-    3. Run content processing pipeline (ASR → Voice Samples → Translation → SoulX Format)
+    This command downloads audio files from RSS feeds and saves them to the data directory.
+    It only performs download, no ASR/translation processing.
 
-    The output includes:
-    - ASR transcription results with speaker diarization
-    - Voice samples for each speaker (if enabled)
-    - Chinese translation results
-    - SoulX format JSON file ready for TTS processing
+    Use 'podtrans asr' after this to process downloaded episodes.
+    Use 'podtrans status' to check progress.
 
     Examples:
-        # Process latest episode from RSS feed
+        # Download from command line URL
         podtrans rss https://feeds.simplecast.com/your-podcast
 
-        # Process 3 latest episodes
+        # Download from config file
+        podtrans rss
+
+        # Download latest 3 episodes
         podtrans rss https://example.com/feed.xml --count 3
 
-        # Custom output directory and languages
-        podtrans rss https://feeds.example.com/podcast -o ./results -s en -t zh
-
-        # Disable voice samples and keep downloads
-        podtrans rss https://feeds.example.com/podcast --no-voice-samples --keep-downloads
+        # Download all episodes
+        podtrans rss https://example.com/feed.xml --mode all
     """
-    import time
-    import shutil
-    from pathlib import Path
+    from podtrans.rss import start_rss_processing
 
-    from podtrans.rss.fetcher import RSSFetcher
-    from podtrans.rss.downloader import AudioDownloader
-    from podtrans.utils.file import write_json
+    console.print("\n[bold blue]📡 PodTrans - RSS Download[/bold blue]\n")
 
-    settings = get_settings()
-    start_time = time.time()
-
-    # Display header
-    console.print("\n[bold blue]🎙️  PodTrans - RSS Content Processing[/bold blue]\n")
-    console.print(f"[dim]RSS Feed:[/dim] {rss_url}")
-    console.print(f"[dim]Episodes to process:[/dim] {count}")
-    console.print(f"[dim]Translation:[/dim] {source_lang} → {target_lang}")
-    console.print(f"[dim]Voice samples:[/dim] {'Disabled' if no_voice_samples else 'Enabled'}")
-    console.print(f"[dim]Output format:[/dim] SoulX JSON (ready for TTS)")
-    console.print(f"[dim]Keep downloads:[/dim] {'Yes' if keep_downloads else 'No'}\n")
-
-    # Validate RSS URL
-    console.print("[bold cyan]📡 Validating RSS feed...[/bold cyan]")
-    fetcher = RSSFetcher()
-    if not fetcher.validate_feed_url(rss_url):
-        console.print("[bold red]❌ Invalid RSS feed URL[/bold red]")
-        raise typer.Exit(1)
-    console.print("[green]✓[/green] RSS feed URL is valid\n")
-
-    # Set up output directory
-    if output is None:
-        timestamp = int(time.time())
-        output_dir = settings.output_dir / f"rss_{timestamp}"
+    if rss_url:
+        console.print(f"[dim]RSS URL:[/dim] {rss_url}")
     else:
-        output_dir = Path(output)
-
-    output_dir.mkdir(parents=True, exist_ok=True)
-    console.print(f"[dim]Output directory:[/dim] {output_dir}\n")
-
-    # Fetch RSS feed
-    console.print("[bold cyan]📰 Fetching RSS feed...[/bold cyan]")
-    try:
-        rss_feed = fetcher.fetch_feed(rss_url, max_episodes=count)
-        console.print(f"[green]✓[/green] Feed: {rss_feed.title}")
-        console.print(f"[green]✓[/green] Episodes found: {rss_feed.total_episodes}")
-        console.print(f"[green]✓[/green] Episodes to process: {len(rss_feed.episodes)}\n")
-    except Exception as e:
-        console.print(f"[bold red]❌ Failed to fetch RSS feed: {e}[/bold red]")
-        logger.exception("RSS fetch error")
-        raise typer.Exit(1)
-
-    if not rss_feed.episodes:
-        console.print("[yellow]⚠️  No episodes found in RSS feed[/yellow]")
-        raise typer.Exit(0)
-
-    # Download episodes to output directory directly
-    download_dir = output_dir
-    downloader = AudioDownloader()
-    downloaded_files = []
-    failed_episodes = []
-
-    console.print("[bold cyan]⬇️  Downloading episodes...[/bold cyan]")
-    try:
-        downloaded_files = downloader.download_episodes(rss_feed.episodes, download_dir)
-        console.print(f"[green]✓[/green] Downloaded: {len(downloaded_files)} files")
-
-        if failed_episodes := len(rss_feed.episodes) - len(downloaded_files):
-            console.print(f"[yellow]⚠️  Failed: {failed_episodes} files[/yellow]")
-    except Exception as e:
-        console.print(f"[bold red]❌ Download failed: {e}[/bold red]")
-        logger.exception("Download error")
-        raise typer.Exit(1)
-
-    if not downloaded_files:
-        console.print("[bold red]❌ No episodes downloaded successfully[/bold red]")
-        raise typer.Exit(1)
-
-    # Use downloaded files directly for processing
-    cached_files = downloaded_files
-
-    # Apply audio segmentation if enabled
-    final_processing_files = []
-
-    if no_segmentation or not settings.audio_segment_enabled:
-        # No segmentation
-        final_processing_files = cached_files
-        console.print("[dim]Audio segmentation: disabled[/dim]")
-    else:
-        # Apply audio segmentation
-        segment_duration = max_segment_duration or settings.audio_segment_max_duration
-        console.print(f"[dim]Audio segmentation: enabled (max {segment_duration}s per segment)[/dim]")
-
-        from podtrans.utils.audio_segmenter import split_long_audio
-
-        for i, cached_file in enumerate(cached_files):
-            console.print(f"[blue]🔍 Checking {cached_file.name} for segmentation...[/blue]")
-
-            try:
-                # Create segment directory for this episode
-                episode_segment_dir = output_dir / f"episode_{i+1:03d}_segments"
-                episode_segment_dir.mkdir(exist_ok=True)
-
-                # Split if needed
-                segment_files = split_long_audio(cached_file, episode_segment_dir, segment_duration)
-                final_processing_files.extend(segment_files)
-
-                if len(segment_files) > 1:
-                    console.print(f"[green]   ✓ Split into {len(segment_files)} segments[/green]")
-                else:
-                    console.print(f"[dim]   ✓ No segmentation needed[/dim]")
-
-            except Exception as e:
-                console.print(f"[yellow]⚠️  Segmentation failed for {cached_file.name}: {e}[/yellow]")
-                # Fall back to original file
-                final_processing_files.append(cached_file)
-
-    processing_files = final_processing_files
-    console.print(f"[dim]Total files to process: {len(processing_files)}[/dim]\n")
-
-    # Process each episode/segment
-    processed_episodes = []
-    failed_processing = []
-
-    # Create episode -> segments mapping
-    episode_segments = {}  # episode_index -> [segment_files]
-
-    for file_index, audio_path in enumerate(processing_files):
-        # Determine which episode this file belongs to
-        episode_index = 0
-        is_segment = False
-
-        # Check if this is a segment file
-        if "segments" in str(audio_path) and "_part_" in str(audio_path):
-            # Extract episode number from path like "episode_001_segments/episode_001_part_001.mp3"
-            import re
-            match = re.search(r'episode_(\d+)_segments', str(audio_path))
-            if match:
-                episode_index = int(match.group(1)) - 1  # Convert to 0-based
-                is_segment = True
-            else:
-                # Fallback: try to get episode from filename prefix
-                match = re.search(r'episode_(\d+)_part_(\d+)', audio_path.name)
-                if match:
-                    episode_index = int(match.group(1)) - 1
-                    is_segment = True
-        else:
-            # This is a non-segmented episode file
-            if file_index < len(cached_files):
-                episode_index = file_index
-            else:
-                episode_index = 0  # Default to first episode
-
-        # Ensure episode_index is within bounds
-        episode_index = min(episode_index, len(rss_feed.episodes) - 1)
-
-        # Add to episode segments mapping
-        if episode_index not in episode_segments:
-            episode_segments[episode_index] = []
-        episode_segments[episode_index].append(audio_path)
-
-    # Process each episode and all its segments
-    for episode_index, segment_files in episode_segments.items():
-        episode = rss_feed.episodes[episode_index]
-
-        console.print(f"[bold cyan]🔄 Processing episode {episode_index + 1}/{len(rss_feed.episodes)}:[/bold cyan] {episode.title}")
-        if len(segment_files) > 1:
-            console.print(f"[dim]   Split into {len(segment_files)} segments[/dim]")
-
-        # Create episode-specific output directory
-        simple_name = f"episode_{episode_index + 1:03d}"
-        episode_dir = output_dir / simple_name
-        episode_dir.mkdir(parents=True, exist_ok=True)
-
-        # Process all segments for this episode
-        episode_success = True
-        all_pipeline_results = []
-
-        for segment_index, audio_path in enumerate(segment_files):
-            if len(segment_files) > 1:
-                console.print(f"[blue]   → Segment {segment_index + 1}/{len(segment_files)}[/blue]")
-
-            try:
-                # Create segment identifier for this specific segment
-                episode_name = simple_name  # e.g., "episode_001"
-                segment_id = f"{episode_name}_part_{segment_index + 1:03d}"
-
-                # Run pipeline orchestrator with segment-specific directory
-                orchestrator = PipelineOrchestrator(episode_dir, segment_id=segment_id)
-                pipeline_meta = asyncio.run(
-                    orchestrator.run_pipeline(
-                        audio_path=audio_path,  # Now uses simple cached filename
-                        language=language,
-                        enable_diarization=not no_diarization,
-                        source_lang=source_lang,
-                        target_lang=target_lang,
-                        extract_voice_samples=False
-                        if no_voice_samples
-                        else None,  # Use config default if not disabled
-                        min_duration=min_sample_duration,
-                        max_duration=max_sample_duration,
-                        min_quality=min_sample_quality,
-                    )
-                )
-                all_pipeline_results.append(pipeline_meta)
-
-            except Exception as e:
-                console.print(f"  [red]✗[/red] Segment {segment_index + 1} failed: {e}")
-                episode_success = False
-                logger.exception(f"Segment processing failed for {audio_path}: {e}")
-
-        if episode_success and all_pipeline_results:
-            # Extract best voice samples for cloning
-            if no_voice_samples:
-                console.print(f"[blue]   → Skipping voice samples extraction (disabled)[/blue]")
-            else:
-                console.print(f"[blue]   → Extracting best voice samples for cloning...[/blue]")
-                try:
-                    from podtrans.utils.voice_samples_extractor import VoiceSamplesExtractor
-                    extractor = VoiceSamplesExtractor(episode_dir)
-                    voice_samples_dir = extractor.process_episode()
-
-                    if voice_samples_dir:
-                        # 计算提取的样本数量
-                        sample_count = len(list(voice_samples_dir.glob("SPEAKER_*.wav")))
-                        console.print(f"  [green]✓[/green] Extracted {sample_count} best voice samples for cloning")
-                    else:
-                        console.print(f"  [yellow]⚠️  No voice samples found[/yellow]")
-
-                except Exception as e:
-                    console.print(f"  [yellow]⚠️  Voice samples extraction failed: {e}[/yellow]")
-                    logger.warning(f"Voice samples extraction failed for {episode.title}: {e}")
-
-            # Merge SoulX format files from all segments if episode was segmented
-            if len(segment_files) > 1:
-                console.print(f"[blue]   → Merging {len(segment_files)} SoulX format files...[/blue]")
-                try:
-                    _merge_episode_soulx_files(episode_dir, len(segment_files))
-                    console.print(f"  [green]✓[/green] SoulX files merged successfully")
-                except Exception as e:
-                    console.print(f"  [yellow]⚠️  Failed to merge SoulX files: {e}[/yellow]")
-                    logger.warning(f"SoulX file merge failed for {episode.title}: {e}")
-
-            processed_episodes.append({
-                'episode_title': episode.title,
-                'episode_description': episode.description,
-                'audio_url': episode.audio_url,
-                'duration': episode.duration,
-                'output_dir': str(episode_dir),
-                'segments_count': len(segment_files),
-                'pipeline_metadata': [meta.model_dump() for meta in all_pipeline_results],
-            })
-
-            # Create episode summary JSON with all segments information
-            console.print(f"[blue]   → Creating episode summary...[/blue]")
-            try:
-                _create_episode_summary(episode_dir, episode, segment_files, all_pipeline_results)
-                console.print(f"  [green]✓[/green] Episode summary created")
-            except Exception as e:
-                console.print(f"  [yellow]⚠️  Failed to create episode summary: {e}[/yellow]")
-                logger.warning(f"Episode summary creation failed for {episode.title}: {e}")
-
-            console.print(f"  [green]✓[/green] Processing complete")
-        else:
-            failed_processing.append({
-                'episode_title': episode.title,
-                'error': "One or more segments failed",
-            })
-
-        console.print()
-
-    # Clean up downloads if requested
-    if not keep_downloads and download_dir.exists():
-        try:
-            shutil.rmtree(download_dir)
-            console.print(f"[dim]Cleaned up download directory: {download_dir}[/dim]\n")
-        except Exception as e:
-            console.print(f"[yellow]⚠️  Failed to clean up downloads: {e}[/yellow]\n")
-
-    # Create processing result summary
-    total_time = time.time() - start_time
-    success_rate = (len(processed_episodes) / len(rss_feed.episodes)) * 100 if rss_feed.episodes else 0
-
-    processing_result = {
-        'feed_url': rss_url,
-        'feed_title': rss_feed.title,
-        'feed_description': rss_feed.description,
-        'episodes_requested': count,
-        'episodes_found': rss_feed.total_episodes,
-        'episodes_downloaded': len(downloaded_files),
-        'episodes_processed': len(processed_episodes),
-        'episodes_failed': len(failed_processing),
-        'success_rate': success_rate,
-        'processing_time_seconds': total_time,
-        'output_directory': str(output_dir),
-        'settings': {
-            'source_lang': source_lang,
-            'target_lang': target_lang,
-            'voice_samples_enabled': not no_voice_samples,
-            'keep_downloads': keep_downloads,
-        },
-        'processed_episodes': processed_episodes,
-        'failed_episodes': failed_processing,
-        'timestamp': time.strftime('%Y-%m-%d %H:%M:%S'),
-    }
-
-    # Save processing results
-    results_file = output_dir / "rss_processing_results.json"
-    try:
-        write_json(processing_result, results_file, indent=2)
-        console.print(f"[green]✓[/green] Results saved to: {results_file}")
-    except Exception as e:
-        console.print(f"[yellow]⚠️  Failed to save results: {e}[/yellow]")
-
-    # Display final summary
-    console.print("\n" + "=" * 60)
-    console.print("[bold green]✨ RSS Content Processing Complete![/bold green]\n")
-    console.print("[dim]📋 Each processed episode contains:[/dim]")
-    console.print("[dim]   • ASR transcription (asr_result.json)[/dim]")
-    console.print("[dim]   • Chinese translation (translation_result.json)[/dim]")
-    console.print("[dim]   • SoulX format JSON (soulx_format.json)[/dim]")
-    if not no_voice_samples:
-        console.print("[dim]   • Original voice samples (per segment)[/dim]")
-        console.print("[dim]   • Best voice samples for cloning (voice_samples_for_cloning/)[/dim]")
-        console.print("[dim]   • Audio files cache (voice_samples_for_cloning/cache/)[/dim]")
-    console.print()
-
-    # Summary table
-    table = Table(show_header=False, box=None)
-    table.add_column("Key", style="cyan")
-    table.add_column("Value", style="white")
-
-    table.add_row("Feed Title", rss_feed.title)
-    table.add_row("Episodes Requested", str(count))
-    table.add_row("Episodes Found", str(rss_feed.total_episodes))
-    table.add_row("Episodes Downloaded", f"{len(downloaded_files)}/{len(rss_feed.episodes)}")
-    table.add_row("Episodes Processed", f"{len(processed_episodes)}/{len(downloaded_files)}")
-    table.add_row("Success Rate", f"{success_rate:.1f}%")
-    table.add_row("Processing Time", f"{total_time:.1f} seconds")
-    table.add_row("Output Directory", str(output_dir))
-
-    console.print(table)
-
-    if processed_episodes:
-        console.print("\n[bold]📁 Processed Episodes:[/bold]")
-        for i, episode in enumerate(processed_episodes, 1):
-            console.print(f"  {i}. {episode['episode_title']}")
-            console.print(f"     [dim]{episode['output_dir']}[/dim]")
-
-    if failed_processing:
-        console.print(f"\n[yellow]⚠️  Failed Episodes: {len(failed_processing)}[/yellow]")
-        for episode in failed_processing:
-            console.print(f"  • {episode['episode_title']}: {episode['error']}")
-
-    # Audio merging for segmented outputs
-    if processed_episodes:
-        console.print("\n[bold]🔄 Checking for segmented audio outputs...[/bold]")
-
-        try:
-            from .utils.audio_merger import merge_segments_in_directory, create_episode_playlist
-
-            merged_episodes = []
-
-            for episode in processed_episodes:
-                episode_output_dir = Path(episode['output_dir'])
-
-                # Check if this episode has segmented TTS outputs
-                segment_files = list(episode_output_dir.glob("**/segment_*_tts_output.wav"))
-
-                if segment_files and len(segment_files) > 1:
-                    console.print(f"[blue]🎵 Merging segments for: {episode['episode_title']}[/blue]")
-
-                    # Merge segments for this episode
-                    merged_files = merge_segments_in_directory(episode_output_dir)
-
-                    if merged_files:
-                        merged_episodes.extend(merged_files)
-                        console.print(f"[green]✓ Merged {len(merged_files)} audio files[/green]")
-                    else:
-                        console.print(f"[yellow]⚠️  No segments found for merging[/yellow]")
-
-            # Create playlist if we have merged files
-            if merged_episodes:
-                playlist_path = output_dir / "merged_episodes_playlist.m3u"
-                create_episode_playlist(merged_episodes, playlist_path)
-                console.print(f"\n[bold green]🎉 Audio merging complete![/bold green]")
-                console.print(f"[green]📁 Playlist: {playlist_path}[/green]")
-
-                # Display merged files info
-                console.print("\n[bold]🎵 Merged Episodes:[/bold]")
-                for i, merged_file in enumerate(merged_episodes, 1):
-                    size_mb = merged_file.stat().st_size / (1024 * 1024)
-                    console.print(f"  {i}. {merged_file.name} ({size_mb:.1f} MB)")
-
-        except ImportError:
-            console.print("[yellow]⚠️  Audio merging requires torchaudio, skipping...[/yellow]")
-        except Exception as e:
-            console.print(f"[yellow]⚠️  Audio merging failed: {e}[/yellow]")
-            logger.warning(f"Audio merging failed: {e}")
-
-    # Cleanup cache if not keeping downloads
-    # Note: No cache cleanup needed as files are now stored directly in output directory
-
-    console.print("\n" + "=" * 60 + "\n")
-
-
-@app.command()
-def synthesize_simple(
-    input_json: Path = typer.Argument(
-        ...,
-        exists=True,
-        help="Path to SoulX format JSON file (user-provided format)",
-    ),
-    output: Path = typer.Option(
-        None,
-        "--output",
-        "-o",
-        help="Output WAV file path (default: same directory as input with .wav extension)",
-    ),
-    timeout: int = typer.Option(
-        None,
-        "--timeout",
-        "-t",
-        help="Timeout in seconds for CLI execution (default: from config)",
-    ),
-    working_dir: str = typer.Option(
-        None,
-        "--working-dir",
-        "-w",
-        help="Working directory for CLI execution (default: from config)",
-    ),
-    # Allow passing additional CLI parameters
-    cli_args: list[str] = typer.Option(
-        None,
-        "--cli-arg",
-        "-c",
-        help="Additional CLI arguments (format: --param=value or --flag)",
-    ),
-) -> None:
-    """Generate podcast audio using simplified SoulX CLI interface.
-
-    This is a simplified version that directly calls the SoulX CLI script
-    without complex data format conversion or environment management.
-
-    The user is responsible for providing the correct SoulX data format JSON file.
-
-    Examples:
-        # Basic usage
-        podtrans synthesize-simple soulx_data.json -o output.wav
-
-        # With custom timeout
-        podtrans synthesize-simple soulx_data.json -o output.wav --timeout 600
-
-        # With working directory
-        podtrans synthesize-simple soulx_data.json -o output.wav --working-dir /tmp
-
-        # With additional CLI arguments
-        podtrans synthesize-simple soulx_data.json -o output.wav --cli-arg --temperature=0.8 --cli-arg --model=custom
-
-    Note:
-        - User must provide JSON file in the exact format expected by SoulX CLI
-        - No data format conversion is performed
-        - No conda environment management is handled
-        - Simple error handling with direct status reporting
-    """
-    settings = get_settings()
-
-    # Display header
-    console.print("\n[bold blue]🎙️  PodTrans - Simple TTS Synthesis[/bold blue]\n")
-    console.print(f"[dim]Input JSON:[/dim] {input_json}")
-
-    # Determine output path
-    if output is None:
-        output_path = input_json.with_suffix('.wav')
-    else:
-        output_path = Path(output)
-
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    console.print(f"[dim]Output audio:[/dim] {output_path}")
-
-    # Set up parameters
-    service_timeout = timeout or settings.soulx_cli_timeout
-    service_working_dir = working_dir or settings.soulx_cli_working_dir
-
-    console.print(f"[dim]Timeout:[/dim] {service_timeout}s")
-    console.print(f"[dim]Working dir:[/dim] {service_working_dir}")
-
-    # Parse additional CLI arguments
-    cli_kwargs = {}
-    if cli_args:
-        console.print(f"[dim]Additional CLI args:[/dim] {cli_args}")
-        for arg in cli_args:
-            if arg.startswith('--') and '=' in arg:
-                # Format: --param=value
-                param, value = arg[2:].split('=', 1)
-                cli_kwargs[param.replace('-', '_')] = value
-            elif arg.startswith('--'):
-                # Format: --flag (boolean)
-                cli_kwargs[arg[2:].replace('-', '_')] = True
-
-    # Create simple service
-    console.print("\n[bold cyan]🚀 Initializing Simple SoulX Service...[/bold cyan]")
+        console.print(f"[dim]Config:[/dim] {config}")
+
+    console.print(f"[dim]Mode:[/dim] {mode}")
+    console.print(f"[dim]Count:[/dim] {count if mode == 'latest' else 'all'}")
+    console.print(f"[dim]Data dir:[/dim] {data_dir}\n")
 
     try:
-        simple_service = create_simple_tts_service()
-
-        # Override timeout/working_dir if provided
-        if timeout:
-            simple_service.timeout = service_timeout
-        if working_dir:
-            simple_service.working_dir = service_working_dir
-
-        # Override conda environment if provided (not exposed as CLI param for simplicity)
-        # Users can set it via .env file
-        if working_dir or timeout:
-            console.print(f"[green]✓[/green] Service parameters updated")
-
-        console.print("[green]✓[/green] Service initialized successfully")
-        console.print("[yellow]Note:[/yellow] User is responsible for providing correct SoulX data format")
-
-    except Exception as e:
-        console.print(f"[bold red]❌ Failed to initialize Simple SoulX Service: {e}[/bold red]")
-        logger.exception("Simple SoulX Service initialization error")
-        raise typer.Exit(1)
-
-    # Call SoulX CLI
-    console.print("\n[bold cyan]🚀 Calling SoulX CLI...[/bold cyan]")
-    console.print("[dim]This may take several minutes depending on content length...[/dim]\n")
-
-    try:
-        result = simple_service.call_cli(
-            input_json=str(input_json),
-            output_wav=str(output_path),
-            **cli_kwargs
+        # Run RSS processing
+        success = asyncio.run(
+            start_rss_processing(
+                rss_url=rss_url,
+                data_dir=str(data_dir),
+                config_path=str(config),
+                download_mode=mode,
+                download_count=count,
+            )
         )
 
-        # Display results
-        console.print("\n" + "=" * 60)
-
-        if result["success"]:
-            console.print("[bold green]✨ Synthesis Complete![/bold green]\n")
-
-            # Create summary table
-            table = Table(show_header=False, box=None)
-            table.add_column("Key", style="cyan")
-            table.add_column("Value", style="white")
-
-            table.add_row("Status", "[green]Success[/green]")
-            table.add_row("Output File", str(result["output_path"]))
-            table.add_row("Return Code", str(result["return_code"]))
-
-            # Check if output file exists and get info
-            if output_path.exists():
-                file_size = output_path.stat().st_size / (1024 * 1024)  # MB
-                table.add_row("File Size", f"{file_size:.2f} MB")
-
-            console.print(table)
-
-            if result.get("stdout"):
-                console.print(f"\n[dim]CLI Output:[/dim]")
-                console.print(f"[dim]{result['stdout'][:500]}{'...' if len(result['stdout']) > 500 else ''}[/dim]")
-
+        if success:
+            console.print("\n[bold green]✅ RSS download completed![/bold green]")
+            console.print("[dim]Run 'podtrans asr' to process downloaded episodes[/dim]")
+            console.print("[dim]Run 'podtrans status' to check progress[/dim]\n")
         else:
-            console.print("[bold red]❌ Synthesis Failed[/bold red]\n")
-
-            # Create error summary table
-            table = Table(show_header=False, box=None)
-            table.add_column("Key", style="cyan")
-            table.add_column("Value", style="white")
-
-            table.add_row("Status", "[red]Failed[/red]")
-            table.add_row("Return Code", str(result["return_code"]))
-            table.add_row("Error", result["error"])
-
-            console.print(table)
-
-            if result.get("stderr"):
-                console.print(f"\n[bold]Error Details:[/bold]")
-                console.print(f"[red]{result['stderr'][:1000]}{'...' if len(result['stderr']) > 1000 else ''}[/red]")
-
-        console.print("\n" + "=" * 60 + "\n")
-
-    except KeyboardInterrupt:
-        console.print("\n[yellow]⚠️  Interrupted by user[/yellow]")
-        raise typer.Exit(1)
+            console.print("\n[bold red]❌ RSS download failed[/bold red]")
+            raise typer.Exit(1)
 
     except Exception as e:
-        console.print(f"\n[bold red]❌ Unexpected error: {e}[/bold red]")
-        logger.exception("Simple TTS synthesis error")
+        console.print(f"\n[bold red]❌ RSS download error: {e}[/bold red]")
+        logger.exception("RSS download error")
         raise typer.Exit(1)
 
 
@@ -1872,6 +605,342 @@ def _create_episode_summary(
         json.dump(episode_summary, f, ensure_ascii=False, indent=2)
 
     logger.info(f"Episode summary saved to {summary_file}")
+
+
+@app.command()
+def asr(
+    data_dir: Path = typer.Option(
+        Path("./data"),
+        "--data-dir",
+        "-d",
+        help="Data directory path",
+    ),
+    max_retries: int = typer.Option(
+        3,
+        "--max-retries",
+        help="Maximum retry count for failed episodes",
+    ),
+) -> None:
+    """Batch process ASR for all downloaded episodes.
+
+    This command:
+    - Queries database for episodes with download_completed=True and asr_completed=False
+    - Processes each episode with WhisperX ASR
+    - Saves results to episode directory
+    - Updates database with completion status
+
+    Example:
+        podtrans asr
+        podtrans asr --data-dir ./data --max-retries 5
+    """
+    from podtrans.services.database import DatabaseManager
+
+    console.print("\n[bold blue]🎙️  PodTrans - Batch ASR Processing[/bold blue]\n")
+
+    # Initialize database
+    db_path = data_dir / "episodes.db"
+    if not db_path.exists():
+        console.print(f"[bold red]❌ Database not found: {db_path}[/bold red]")
+        raise typer.Exit(1)
+
+    db = DatabaseManager(db_path, init_db=False)
+
+    # Query pending episodes
+    episodes = db.get_pending_episodes(stage='asr')
+
+    # Filter by retry count
+    episodes = [ep for ep in episodes if ep.get('retry_count', 0) < max_retries]
+
+    if not episodes:
+        console.print("[green]✅ No episodes pending for ASR processing[/green]")
+        return
+
+    console.print(f"[cyan]Found {len(episodes)} episodes to process[/cyan]\n")
+
+    # Initialize ASR handler
+    settings = get_settings()
+    handler = WhisperXHandler(
+        model_name=settings.whisper_model,
+        device=settings.device,
+        compute_type=settings.compute_type,
+        hf_token=settings.hf_token,
+    )
+
+    success_count = 0
+    failed_count = 0
+
+    # Process each episode
+    for idx, episode in enumerate(episodes, 1):
+        episode_id = episode['id']
+        episode_title = episode['episode_title']
+        audio_path = Path(episode['audio_path'])
+        episode_dir = Path(episode['episode_dir'])
+
+        console.print(f"[bold]Processing [{idx}/{len(episodes)}][/bold]: {episode_title}")
+        console.print(f"[dim]Audio: {audio_path}[/dim]")
+
+        try:
+            # Check if audio file exists
+            if not audio_path.exists():
+                raise FileNotFoundError(f"Audio file not found: {audio_path}")
+
+            # Process ASR
+            logger.info(f"开始ASR处理: {episode_title}")
+            asr_result = handler.process_full_pipeline(
+                audio_path=audio_path,
+                language=None,  # Auto-detect
+                enable_diarization=True,
+            )
+
+            # Save result
+            result_path = episode_dir / "asr_result.json"
+            write_json(asr_result.model_dump(), result_path)
+
+            # Update database
+            db.update_episode_status(episode_id, {
+                'asr_completed': True,
+                'asr_result_path': str(result_path),
+                'asr_timestamp': datetime.now(),
+                'retry_count': 0,  # Reset retry count on success
+            })
+
+            success_count += 1
+            console.print(f"[green]✅ Success[/green]: {result_path}\n")
+            logger.info(f"ASR处理成功: {episode_title}")
+
+        except Exception as e:
+            failed_count += 1
+            error_msg = str(e)
+
+            # Update database with error
+            current_retry = episode.get('retry_count', 0)
+            db.update_episode_status(episode_id, {
+                'retry_count': current_retry + 1,
+                'error_count': episode.get('error_count', 0) + 1,
+                'last_error': error_msg,
+            })
+
+            console.print(f"[red]❌ Failed[/red]: {error_msg}\n")
+            logger.error(f"ASR处理失败: {episode_title}: {error_msg}")
+
+    # Print summary
+    console.print("\n" + "="*50)
+    console.print(f"[bold]Processing Summary[/bold]")
+    console.print(f"  Total: {len(episodes)}")
+    console.print(f"  [green]Success: {success_count}[/green]")
+    console.print(f"  [red]Failed: {failed_count}[/red]")
+    console.print("="*50 + "\n")
+
+
+def _format_file_size(size_bytes: int) -> str:
+    """格式化文件大小"""
+    if size_bytes < 1024:
+        return f"{size_bytes} B"
+    elif size_bytes < 1024 * 1024:
+        return f"{size_bytes / 1024:.1f} KB"
+    elif size_bytes < 1024 * 1024 * 1024:
+        return f"{size_bytes / (1024 * 1024):.1f} MB"
+    else:
+        return f"{size_bytes / (1024 * 1024 * 1024):.2f} GB"
+
+
+def _format_duration(seconds: float) -> str:
+    """格式化时长"""
+    if seconds < 60:
+        return f"{seconds:.0f}s"
+    elif seconds < 3600:
+        mins = int(seconds // 60)
+        secs = int(seconds % 60)
+        return f"{mins}m {secs}s"
+    else:
+        hours = int(seconds // 3600)
+        mins = int((seconds % 3600) // 60)
+        return f"{hours}h {mins}m"
+
+
+def _render_status_display(data_dir: Path, show_episodes: bool = False) -> None:
+    """渲染状态显示（用于刷新）"""
+    import sqlite3
+    from rich.progress import Progress, BarColumn, TextColumn
+    from rich.layout import Layout
+    from rich.live import Live
+
+    db_path = data_dir / "episodes.db"
+    if not db_path.exists():
+        console.print(f"[bold red]❌ Database not found: {db_path}[/bold red]")
+        console.print(f"[dim]Run 'podtrans rss' first to download episodes[/dim]\n")
+        return
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+
+    # 获取所有剧集
+    all_episodes = conn.execute("""
+        SELECT * FROM episodes
+        ORDER BY created_at DESC
+    """).fetchall()
+
+    # 统计数据
+    total = len(all_episodes)
+    download_done = sum(1 for ep in all_episodes if ep['download_completed'])
+    asr_done = sum(1 for ep in all_episodes if ep['asr_completed'])
+    trans_done = sum(1 for ep in all_episodes if ep['translation_completed'])
+    tts_done = sum(1 for ep in all_episodes if ep['tts_completed'])
+
+    # 计算总文件大小
+    total_size = sum(ep['file_size'] or 0 for ep in all_episodes)
+
+    # 统计错误
+    error_count = sum(1 for ep in all_episodes if ep['last_error'])
+
+    conn.close()
+
+    # 清屏效果
+    console.clear()
+
+    # 标题
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    console.print(f"\n[bold blue]📊 PodTrans Status[/bold blue]  [dim]{now}[/dim]\n")
+
+    # 总览表格
+    overview_table = Table(show_header=False, box=None, padding=(0, 2))
+    overview_table.add_column("Label", style="dim")
+    overview_table.add_column("Value", style="bold")
+
+    overview_table.add_row("Total Episodes", str(total))
+    overview_table.add_row("Total Size", _format_file_size(total_size))
+    overview_table.add_row("Errors", f"[red]{error_count}[/red]" if error_count else "[green]0[/green]")
+
+    console.print(overview_table)
+    console.print()
+
+    # 进度条显示
+    if total > 0:
+        console.print("[bold]Pipeline Progress[/bold]\n")
+
+        # 手动绘制进度条
+        stages = [
+            ("Download", download_done, "green"),
+            ("ASR", asr_done, "cyan"),
+            ("Translation", trans_done, "yellow"),
+            ("TTS", tts_done, "magenta"),
+        ]
+
+        for stage_name, completed, color in stages:
+            pct = (completed / total) * 100 if total > 0 else 0
+            bar_width = 30
+            filled = int(bar_width * completed / total) if total > 0 else 0
+            bar = "█" * filled + "░" * (bar_width - filled)
+            console.print(f"  {stage_name:12} [{color}]{bar}[/{color}] {completed}/{total} ({pct:.0f}%)")
+
+        console.print()
+
+    # 剧集列表
+    if show_episodes and all_episodes:
+        console.print("[bold]Episodes[/bold]\n")
+
+        ep_table = Table(show_header=True, header_style="bold", box=None)
+        ep_table.add_column("#", style="dim", width=3)
+        ep_table.add_column("Title", style="white", max_width=40, overflow="ellipsis")
+        ep_table.add_column("Size", style="cyan", justify="right", width=10)
+        ep_table.add_column("Status", width=20)
+        ep_table.add_column("Updated", style="dim", width=16)
+
+        for idx, ep in enumerate(all_episodes[:10], 1):  # 只显示最近10个
+            # 状态图标
+            d = "✅" if ep['download_completed'] else "⏳"
+            a = "✅" if ep['asr_completed'] else ("⏳" if ep['download_completed'] else "⬜")
+            t = "✅" if ep['translation_completed'] else ("⏳" if ep['asr_completed'] else "⬜")
+            s = "✅" if ep['tts_completed'] else ("⏳" if ep['translation_completed'] else "⬜")
+
+            status_str = f"{d}→{a}→{t}→{s}"
+
+            # 如果有错误，添加红色标记
+            if ep['last_error']:
+                status_str += " [red]⚠[/red]"
+
+            # 文件大小
+            size_str = _format_file_size(ep['file_size']) if ep['file_size'] else "-"
+
+            # 更新时间
+            updated = ep['updated_at'][:16] if ep['updated_at'] else "-"
+
+            # 标题截断
+            title = ep['episode_title']
+            if len(title) > 40:
+                title = title[:37] + "..."
+
+            ep_table.add_row(str(idx), title, size_str, status_str, updated)
+
+        console.print(ep_table)
+
+        if len(all_episodes) > 10:
+            console.print(f"\n[dim]... and {len(all_episodes) - 10} more episodes[/dim]")
+
+    console.print()
+
+    # 错误详情
+    errors = [ep for ep in all_episodes if ep['last_error']]
+    if errors:
+        console.print(f"[bold red]Errors ({len(errors)})[/bold red]\n")
+        for ep in errors[:3]:  # 只显示最近3个错误
+            console.print(f"  [red]•[/red] {ep['episode_title'][:50]}")
+            console.print(f"    [dim]{ep['last_error'][:80]}[/dim]")
+        if len(errors) > 3:
+            console.print(f"\n[dim]  ... and {len(errors) - 3} more errors[/dim]")
+        console.print()
+
+
+@app.command()
+def status(
+    data_dir: Path = typer.Option(
+        Path("./data"),
+        "--data-dir",
+        "-d",
+        help="Data directory path",
+    ),
+    watch: bool = typer.Option(
+        False,
+        "--watch",
+        "-w",
+        help="Auto-refresh every 2 seconds",
+    ),
+    interval: float = typer.Option(
+        2.0,
+        "--interval",
+        "-i",
+        help="Refresh interval in seconds (default: 2)",
+    ),
+    episodes: bool = typer.Option(
+        True,
+        "--episodes/--no-episodes",
+        "-e/-E",
+        help="Show episode list (default: yes)",
+    ),
+) -> None:
+    """Show pipeline processing status.
+
+    Displays real-time progress of podcast processing pipeline.
+
+    Example:
+        podtrans status              # 显示状态
+        podtrans status -w           # 自动刷新模式
+        podtrans status -w -i 5      # 每5秒刷新
+        podtrans status --no-episodes # 不显示剧集列表
+    """
+    import time
+
+    if watch:
+        console.print("[dim]Press Ctrl+C to exit watch mode[/dim]\n")
+        try:
+            while True:
+                _render_status_display(data_dir, show_episodes=episodes)
+                console.print(f"[dim]Refreshing every {interval}s... (Ctrl+C to exit)[/dim]")
+                time.sleep(interval)
+        except KeyboardInterrupt:
+            console.print("\n[dim]Stopped watching[/dim]")
+    else:
+        _render_status_display(data_dir, show_episodes=episodes)
 
 
 @app.callback()

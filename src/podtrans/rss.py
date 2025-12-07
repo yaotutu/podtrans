@@ -5,6 +5,7 @@ RSS模块 - 播客RSS feed处理
 """
 
 import sys
+import re
 import json
 import asyncio
 from pathlib import Path
@@ -13,12 +14,90 @@ from loguru import logger
 import httpx
 import feedparser
 from datetime import datetime
+from email.utils import parsedate_to_datetime
 
 # 添加项目根目录到路径
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from .services.database import DatabaseManager
 from .rss_config import RSSFeedConfig, GlobalSettings
+
+
+def clean_title_for_folder(title: str, max_length: int = 50) -> str:
+    """
+    清理标题用于文件夹命名
+
+    Args:
+        title: 原始标题
+        max_length: 最大长度（默认50字符）
+
+    Returns:
+        清理后的标题
+    """
+    # 1. 转小写
+    cleaned = title.lower()
+
+    # 2. 移除特殊字符
+    cleaned = re.sub(r"['\"\:?!,.\(\)\[\]\{\}]", "", cleaned)
+
+    # 3. 空格替换为 -
+    cleaned = re.sub(r"\s+", "-", cleaned)
+
+    # 4. 多个连续 - 合并为单个
+    cleaned = re.sub(r"-+", "-", cleaned)
+
+    # 5. 去除首尾 -
+    cleaned = cleaned.strip("-")
+
+    # 6. 截断到最大长度（在单词边界）
+    if len(cleaned) > max_length:
+        # 找到最大长度内最后一个 - 的位置
+        truncated = cleaned[:max_length]
+        last_dash = truncated.rfind("-")
+        if last_dash > max_length // 2:  # 至少保留一半长度
+            cleaned = truncated[:last_dash]
+        else:
+            cleaned = truncated.rstrip("-")
+
+    return cleaned
+
+
+def parse_publication_date(pub_date_str: str) -> str:
+    """
+    解析RSS发布日期为YYYY-MM-DD格式
+
+    Args:
+        pub_date_str: RSS的published字段（如 "Sat, 6 Dec 2025 11:00:00 +0000"）
+
+    Returns:
+        日期字符串，格式为 YYYY-MM-DD
+    """
+    if not pub_date_str:
+        return datetime.now().strftime("%Y-%m-%d")
+
+    try:
+        # RSS标准日期格式 (RFC 2822)
+        dt = parsedate_to_datetime(pub_date_str)
+        return dt.strftime("%Y-%m-%d")
+    except Exception:
+        # 解析失败，使用当前日期
+        return datetime.now().strftime("%Y-%m-%d")
+
+
+def generate_episode_folder_name(title: str, pub_date_str: str) -> str:
+    """
+    生成剧集文件夹名
+
+    Args:
+        title: 剧集标题
+        pub_date_str: 发布日期字符串
+
+    Returns:
+        文件夹名，格式为 {cleaned_title}_{date}
+    """
+    cleaned_title = clean_title_for_folder(title)
+    date_str = parse_publication_date(pub_date_str)
+    return f"{cleaned_title}_{date_str}"
 
 
 class RSSProcessor:
@@ -110,22 +189,34 @@ class RSSProcessor:
         """
         try:
             episode_title = episode.get('title', 'Unknown Episode')
+            episode_guid = episode.get('id', '')  # RSS GUID - 唯一标识符
+            pub_date_str = episode.get('published', '')
             logger.info(f"处理剧集: {episode_title}")
+            logger.debug(f"GUID: {episode_guid}")
 
-            # 1. 检查是否已经处理过
-            existing_episode = self.db.get_episode_by_title(episode_title, podcast_name)
+            if not episode_guid:
+                logger.error(f"剧集 {episode_title} 没有GUID，跳过")
+                return False
+
+            # 1. 检查是否已经处理过（用GUID查询）
+            existing_episode = self.db.get_episode_by_guid(episode_guid)
             if existing_episode and existing_episode.get('download_completed'):
                 logger.info(f"剧集已存在且下载完成: {episode_title}")
                 return True
 
-            # 2. 创建固定的输出目录（基于播客名称）
+            # 2. 创建播客目录和剧集子目录
             podcast_name_clean = podcast_name.replace(' ', '_').replace('/', '_')
-            episode_dir = self.data_dir / podcast_name_clean
-            episode_dir.mkdir(parents=True, exist_ok=True)
+            podcast_dir = self.data_dir / podcast_name_clean
+            podcast_dir.mkdir(parents=True, exist_ok=True)
 
-            # 生成固定的音频文件名（基于剧集标题）
-            episode_title_clean = episode_title.replace(' ', '_').replace('/', '_').replace('?', '').replace('!', '').replace(':', '').replace('"', '').replace("'", "")
-            audio_path = episode_dir / f"{episode_title_clean}.mp3"
+            # 使用 标题+日期 作为文件夹名，提高可读性
+            episode_folder_name = generate_episode_folder_name(episode_title, pub_date_str)
+            episode_dir = podcast_dir / episode_folder_name
+            episode_dir.mkdir(parents=True, exist_ok=True)
+            logger.debug(f"文件夹: {episode_folder_name}")
+
+            # 音频文件统一命名为 episode.mp3
+            audio_path = episode_dir / "episode.mp3"
 
             # 3. 提取音频URL
             audio_url = ""
@@ -140,7 +231,7 @@ class RSSProcessor:
             episode_id = self.db.create_episode(
                 podcast_name=podcast_name,
                 episode_title=episode_title,
-                episode_number=None,
+                episode_guid=episode_guid,
                 episode_dir=str(episode_dir),
                 audio_url=audio_url,
                 audio_path=str(audio_path),
@@ -167,8 +258,7 @@ class RSSProcessor:
                     # 更新数据库状态
                     self.db.update_episode_status(episode_id, {
                         'file_size': file_size,
-                        'download_completed': True,
-                        'current_stage': 'asr'
+                        'download_completed': True
                     })
                     logger.info(f"使用已存在的音频文件: {episode_title}")
                     return True
@@ -202,8 +292,7 @@ class RSSProcessor:
                     # 7. 更新数据库状态
                     self.db.update_episode_status(episode_id, {
                         'file_size': file_size,
-                        'download_completed': True,
-                        'current_stage': 'asr'
+                        'download_completed': True
                     })
 
                     logger.info(f"剧集处理完成: {episode_title}")

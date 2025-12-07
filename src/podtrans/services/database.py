@@ -17,16 +17,20 @@ from loguru import logger
 class DatabaseManager:
     """播客剧集数据库管理器"""
 
-    def __init__(self, db_path: Path):
+    def __init__(self, db_path: Path, init_db: bool = True):
         """
         初始化数据库管理器
 
         Args:
             db_path: 数据库文件路径
+            init_db: 是否初始化数据库表结构（默认True）
+                     - True: RSS模块首次创建数据库时使用
+                     - False: 其他模块只读写时使用，跳过初始化
         """
         self.db_path = Path(db_path)
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._init_database()
+        if init_db:
+            self.db_path.parent.mkdir(parents=True, exist_ok=True)
+            self._init_database()
 
     def _init_database(self):
         """初始化数据库表结构"""
@@ -36,7 +40,7 @@ class DatabaseManager:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     podcast_name TEXT NOT NULL,
                     episode_title TEXT NOT NULL,
-                    episode_number INTEGER,
+                    episode_guid TEXT NOT NULL UNIQUE,
                     episode_dir TEXT NOT NULL,
                     audio_url TEXT NOT NULL,
                     audio_path TEXT NOT NULL,
@@ -57,7 +61,6 @@ class DatabaseManager:
                     tts_completed BOOLEAN DEFAULT FALSE,
                     tts_timestamp TIMESTAMP,
                     tts_result_path TEXT,
-                    current_stage TEXT DEFAULT 'download',
 
                     -- 错误处理
                     error_count INTEGER DEFAULT 0,
@@ -67,25 +70,22 @@ class DatabaseManager:
 
                     -- 时间戳
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-
-                    UNIQUE(podcast_name, episode_title)
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
 
             # 创建索引提高查询性能
             conn.execute("CREATE INDEX IF NOT EXISTS idx_episodes_podcast ON episodes(podcast_name)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_episodes_number ON episodes(episode_number)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_episodes_guid ON episodes(episode_guid)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_download_completed ON episodes(download_completed)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_current_stage ON episodes(current_stage)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_processing ON episodes(processing)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_asr_completed ON episodes(asr_completed)")
 
             logger.info(f"数据库初始化完成: {self.db_path}")
 
     def create_episode(self,
                       podcast_name: str,
                       episode_title: str,
-                      episode_number: Optional[int],
+                      episode_guid: str,
                       episode_dir: str,
                       audio_url: str,
                       audio_path: str,
@@ -98,7 +98,7 @@ class DatabaseManager:
         Args:
             podcast_name: 播客名称
             episode_title: 剧集标题
-            episode_number: 剧集编号
+            episode_guid: RSS GUID（唯一标识符）
             episode_dir: 剧集目录
             audio_url: 音频URL
             audio_path: 音频文件路径
@@ -113,12 +113,12 @@ class DatabaseManager:
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.execute("""
                     INSERT OR IGNORE INTO episodes
-                    (podcast_name, episode_title, episode_number, episode_dir,
+                    (podcast_name, episode_title, episode_guid, episode_dir,
                      audio_url, audio_path, publication_date, description, duration,
-                     current_stage, download_completed, asr_completed, translation_completed, tts_completed)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'download', FALSE, FALSE, FALSE, FALSE)
+                     download_completed, asr_completed, translation_completed, tts_completed)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, FALSE, FALSE, FALSE, FALSE)
                 """, (
-                    podcast_name, episode_title, episode_number, episode_dir,
+                    podcast_name, episode_title, episode_guid, episode_dir,
                     audio_url, audio_path, publication_date, description, duration
                 ))
 
@@ -126,8 +126,8 @@ class DatabaseManager:
                     # 记录已存在，获取现有ID
                     result = conn.execute("""
                         SELECT id FROM episodes
-                        WHERE podcast_name = ? AND episode_title = ?
-                    """, (podcast_name, episode_title))
+                        WHERE episode_guid = ?
+                    """, (episode_guid,))
                     episode_id = result.fetchone()[0]
                     logger.info(f"剧集已存在，返回现有ID: {episode_id}")
                 else:
@@ -358,6 +358,33 @@ class DatabaseManager:
                     SELECT * FROM episodes
                     WHERE episode_title = ? AND podcast_name = ?
                 """, (episode_title, podcast_name))
+
+                row = result.fetchone()
+                if row:
+                    return dict(row)
+                return None
+
+        except sqlite3.Error as e:
+            logger.error(f"获取剧集信息失败: {e}")
+            return None
+
+    def get_episode_by_guid(self, episode_guid: str) -> Optional[Dict[str, Any]]:
+        """
+        根据GUID获取剧集信息
+
+        Args:
+            episode_guid: RSS GUID
+
+        Returns:
+            剧集信息字典，如果不存在返回None
+        """
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                conn.row_factory = sqlite3.Row
+                result = conn.execute("""
+                    SELECT * FROM episodes
+                    WHERE episode_guid = ?
+                """, (episode_guid,))
 
                 row = result.fetchone()
                 if row:
