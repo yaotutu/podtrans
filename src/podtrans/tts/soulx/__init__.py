@@ -1,6 +1,5 @@
-"""SoulX-Podcast TTS service adapter."""
+"""SoulX-Podcast 格式转换器"""
 
-from podtrans.tts.soulx.client import SoulXClient
 from podtrans.tts.soulx.converter import SoulXConverter
 
-__all__ = ["SoulXClient", "SoulXConverter"]
+__all__ = ["SoulXConverter"]

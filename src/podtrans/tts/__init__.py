@@ -2,6 +2,6 @@
 
 from podtrans.tts.base import TTSService
 from podtrans.tts.schemas import SpeakerConfig, TTSResult
-from podtrans.tts.soulx.client import SoulXClient
+from podtrans.tts.soulx.converter import SoulXConverter
 
-__all__ = ["TTSService", "SpeakerConfig", "TTSResult", "SoulXClient"]
+__all__ = ["TTSService", "SpeakerConfig", "TTSResult", "SoulXConverter"]

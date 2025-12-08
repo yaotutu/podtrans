@@ -17,7 +17,6 @@ from podtrans.asr import WhisperXHandler
 from podtrans.config import get_settings
 from podtrans.translation import Translator
 from podtrans.translation.schemas import TranslationResult
-from podtrans.tts.factory import create_tts_service
 from podtrans.tts.schemas import SpeakerConfig
 from podtrans.utils.file import read_json, write_json
 
@@ -819,6 +818,168 @@ def translation(
     if success_count > 0 or failed_count > 0:
         console.print("\n" + "=" * 50)
         console.print("[bold]Translation Summary[/bold]")
+        console.print(f"  Total: {success_count + failed_count}")
+        console.print(f"  [green]Success: {success_count}[/green]")
+        console.print(f"  [red]Failed: {failed_count}[/red]")
+        console.print("=" * 50 + "\n")
+
+
+@app.command()
+def tts(
+    data_dir: Path = typer.Option(
+        Path("./data"),
+        "--data-dir",
+        "-d",
+        help="Data directory path",
+    ),
+    max_retries: int = typer.Option(
+        3,
+        "--max-retries",
+        help="Maximum retry count for failed episodes",
+    ),
+) -> None:
+    """Batch process TTS for all translated episodes.
+
+    This command:
+    - Queries database for episodes with translation_completed=True and
+      tts_completed=False
+    - Assembles SoulX input JSON from translation_result.json and voice_samples.json
+    - Saves soulx_input.json for debugging
+    - Calls SoulX to generate audio
+    - Updates database with completion status
+
+    Example:
+        podtrans tts
+        podtrans tts --data-dir ./data --max-retries 5
+    """
+    from podtrans.services.database import DatabaseManager
+    from podtrans.tts.soulx.converter import SoulXConverter
+
+    console.print("\n[bold blue]🎙️  PodTrans - Batch TTS Processing[/bold blue]\n")
+
+    # Initialize database
+    db_path = data_dir / "episodes.db"
+    if not db_path.exists():
+        console.print(f"[bold red]❌ Database not found: {db_path}[/bold red]")
+        raise typer.Exit(1)
+
+    db = DatabaseManager(db_path, init_db=False)
+
+    # Initialize converter
+    converter = SoulXConverter()
+
+    console.print("[bold cyan]📋 TTS command will only generate soulx_input.json[/bold cyan]")
+    console.print("[yellow]No external TTS service will be called[/yellow]\n")
+
+    success_count = 0
+    failed_count = 0
+    processed_ids: set[int] = set()
+
+    # Process episodes with dynamic query
+    while True:
+        # Query pending episodes each iteration
+        episodes = db.get_pending_episodes(stage="tts")
+        episodes = [
+            ep
+            for ep in episodes
+            if ep.get("retry_count", 0) < max_retries and ep["id"] not in processed_ids
+        ]
+
+        if not episodes:
+            if success_count == 0 and failed_count == 0:
+                console.print("[green]✅ No episodes pending for TTS[/green]")
+            break
+
+        episode = episodes[0]
+        processed_ids.add(episode["id"])
+
+        episode_id = episode["id"]
+        episode_title = episode["episode_title"]
+        episode_dir = Path(episode["episode_dir"])
+
+        total_pending = len(episodes)
+        console.print(
+            f"[bold]Processing TTS[/bold] (pending: {total_pending}): {episode_title}"
+        )
+
+        try:
+            # Check required files
+            translation_path = episode_dir / "translation_result.json"
+            voice_samples_path = episode_dir / "voice_samples.json"
+
+            if not translation_path.exists():
+                raise FileNotFoundError(f"Translation not found: {translation_path}")
+
+            if not voice_samples_path.exists():
+                console.print(
+                    "[yellow]⚠️  voice_samples.json not found, "
+                    "TTS will use default voices[/yellow]"
+                )
+                voice_samples_path = None
+
+            # 使用简化的转换器直接从文件转换
+            logger.info(f"开始TTS处理: {episode_title}")
+            console.print("[dim]Converting to SoulX format...[/dim]")
+
+            # converter 会自动处理所有逻辑
+            soulx_input = converter.convert_from_file(translation_path)
+
+            # 获取统计信息
+            seg_count = len(soulx_input.get("text", []))
+            spk_count = len(soulx_input.get("speakers", {}))
+            console.print(f"[dim]Segments: {seg_count}, Speakers: {spk_count}[/dim]")
+
+            # Save soulx_input.json for debugging
+            soulx_input_path = episode_dir / "soulx_input.json"
+            write_json(soulx_input, soulx_input_path)
+            console.print(f"[green]✓[/green] Saved: {soulx_input_path}")
+
+            # TTS command now only generates soulx_input.json
+            # No external TTS service is called
+            console.print("[yellow]Note: TTS command only generates soulx_input.json[/yellow]")
+            console.print("[yellow]To synthesize audio, run: soulx-podcast --json_path soulx_input.json[/yellow]")
+
+            # Update database
+            db.update_episode_status(
+                episode_id,
+                {
+                    "tts_completed": True,
+                    "tts_soulx_input_path": str(soulx_input_path),
+                    "tts_timestamp": datetime.now(),
+                    "retry_count": 0,
+                },
+            )
+
+            success_count += 1
+            console.print(f"[green]✅ Success[/green]: {soulx_input_path}\n")
+            logger.info(f"TTS处理成功: {episode_title}")
+
+        except KeyboardInterrupt:
+            console.print("\n[yellow]⚠️  Interrupted by user[/yellow]")
+            raise typer.Exit(1)
+
+        except Exception as e:
+            failed_count += 1
+            error_msg = str(e)
+
+            # Update database with error
+            current_retry = episode.get("retry_count", 0)
+            db.update_episode_status(
+                episode_id,
+                {
+                    "retry_count": current_retry + 1,
+                    "error_count": episode.get("error_count", 0) + 1,
+                    "last_error": error_msg,
+                },
+            )
+
+            console.print(f"[red]❌ Failed[/red]: {error_msg}\n")
+            logger.error(f"TTS处理失败: {episode_title}: {error_msg}")
+
+    # Print summary
+    if success_count > 0 or failed_count > 0:
+        console.print("\n" + "=" * 50)
+        console.print("[bold]TTS Summary[/bold]")
         console.print(f"  Total: {success_count + failed_count}")
         console.print(f"  [green]Success: {success_count}[/green]")
         console.print(f"  [red]Failed: {failed_count}[/red]")
