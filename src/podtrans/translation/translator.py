@@ -1,6 +1,7 @@
 """Translation handler using OpenAI-compatible API (DashScope)."""
 
 import json
+from enum import Enum
 from pathlib import Path
 
 import tiktoken
@@ -11,6 +12,22 @@ from podtrans.asr.schemas import ASRResult, Segment
 from podtrans.config import Settings
 from podtrans.translation.cache import TranslationCache
 from podtrans.translation.schemas import TranslatedSegment, TranslationResult
+
+
+class TranslationErrorType(Enum):
+    """Translation error types for different handling strategies."""
+
+    NETWORK = "network"  # 网络错误，可重试
+    RATE_LIMIT = "rate_limit"  # 限流，等待后重试
+    CONTENT_BLOCKED = "content_blocked"  # 内容审核，不重试，需定位问题段落
+    API_ERROR = "api_error"  # API 错误，可重试
+    PARSE_ERROR = "parse_error"  # 解析错误，可重试
+
+
+class ContentBlockedError(Exception):
+    """Raised when content is blocked by API content moderation."""
+
+    pass
 
 
 class Translator:
@@ -416,12 +433,40 @@ class Translator:
                 if attempt == self.max_retries - 1:
                     logger.error("Max retries reached, translation failed")
                     raise
+
             except Exception as e:
-                logger.warning(
-                    f"Translation attempt {attempt + 1}/{self.max_retries} failed: {e}"
-                )
+                error_type = self._classify_error(e)
+
+                if error_type == TranslationErrorType.CONTENT_BLOCKED:
+                    # Don't retry for content blocked errors, raise immediately
+                    # with clear reason for later manual review
+                    logger.error(
+                        f"Content blocked by API moderation: {str(e)[:200]}"
+                    )
+                    raise ContentBlockedError(
+                        "内容审核未通过 (政治敏感/不当内容)，需人工审核处理"
+                    ) from e
+
+                elif error_type == TranslationErrorType.RATE_LIMIT:
+                    # Rate limit: wait longer before retry
+                    import time
+                    wait_time = 30 * (attempt + 1)  # 30s, 60s, 90s
+                    logger.warning(
+                        f"Rate limit hit, waiting {wait_time}s before retry..."
+                    )
+                    time.sleep(wait_time)
+
+                else:
+                    # Other errors: normal retry logic
+                    logger.warning(
+                        f"Translation attempt {attempt + 1}/{self.max_retries} failed "
+                        f"({error_type.value}): {e}"
+                    )
+
                 if attempt == self.max_retries - 1:
-                    logger.error("Max retries reached, translation failed")
+                    logger.error(
+                        f"Max retries reached for error type: {error_type.value}"
+                    )
                     raise
 
         # This should never be reached due to the raise in the except block
@@ -518,6 +563,29 @@ Now translate the following podcast segments:"""
         translations = [line for line in lines if line]
 
         return translations
+
+    def _classify_error(self, error: Exception) -> TranslationErrorType:
+        """Classify error type for appropriate handling strategy.
+
+        Args:
+            error: The exception to classify
+
+        Returns:
+            TranslationErrorType indicating how to handle the error
+        """
+        error_str = str(error).lower()
+
+        if "data_inspection_failed" in error_str or "inappropriate content" in error_str:
+            return TranslationErrorType.CONTENT_BLOCKED
+        elif "rate_limit" in error_str or "429" in error_str:
+            return TranslationErrorType.RATE_LIMIT
+        elif "timeout" in error_str or "connection" in error_str:
+            return TranslationErrorType.NETWORK
+        elif "json" in error_str:
+            return TranslationErrorType.PARSE_ERROR
+        else:
+            return TranslationErrorType.API_ERROR
+
 
     def _retry_missing_segments(
         self,

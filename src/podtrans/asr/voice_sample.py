@@ -17,9 +17,14 @@
 
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
+from loguru import logger
 from pydantic import BaseModel, Field
+from pydub import AudioSegment
+
+if TYPE_CHECKING:
+    from podtrans.asr.schemas import ASRResult, Segment
 
 
 class VoiceSample(BaseModel):
@@ -29,7 +34,7 @@ class VoiceSample(BaseModel):
     """
 
     speaker_id: str = Field(description="说话人ID (例如 'SPEAKER_00')")
-    audio_path: Path = Field(description="音频文件路径")
+    audio_path: str = Field(description="音频文件路径 (相对于episode目录)")
     text_content: str = Field(description="对应的文字内容")
     start_time: float = Field(ge=0, description="开始时间（秒）")
     end_time: float = Field(ge=0, description="结束时间（秒）")
@@ -226,3 +231,246 @@ class QualityScorer:
             return "勉强可用：质量一般，建议寻找更好的样本"
         else:
             return "不推荐：质量不足，建议舍弃"
+
+
+class VoiceSampleExtractor:
+    """声音样本提取器
+
+    从ASR结果中提取每个说话人的最佳声音片段，用于后续TTS声音克隆。
+    """
+
+    def __init__(
+        self,
+        min_duration: float = 5.0,
+        max_duration: float = 20.0,
+        top_k: int = 1,
+    ):
+        """初始化提取器
+
+        Args:
+            min_duration: 最小样本时长（秒），默认5秒
+            max_duration: 最大样本时长（秒），默认20秒
+            top_k: 每个说话人选取的最佳样本数量，默认1个
+        """
+        self.min_duration = min_duration
+        self.max_duration = max_duration
+        self.top_k = top_k
+        self.scorer = QualityScorer()
+
+    def extract_samples(
+        self,
+        audio_path: Path,
+        asr_result: "ASRResult",
+        output_dir: Path,
+    ) -> VoiceExtractionResult:
+        """从音频中提取每个说话人的最佳样本
+
+        Args:
+            audio_path: 原始音频文件路径
+            asr_result: ASR处理结果
+            output_dir: 输出目录
+
+        Returns:
+            VoiceExtractionResult: 提取结果，包含每个说话人的最佳样本
+        """
+        logger.info(f"开始提取声音样本: {audio_path}")
+
+        # 1. 按说话人分组 segments
+        speaker_segments = self._group_segments_by_speaker(asr_result)
+        logger.info(f"检测到 {len(speaker_segments)} 个说话人")
+
+        # 2. 创建输出目录
+        voice_samples_dir = output_dir / "voice_samples"
+        voice_samples_dir.mkdir(parents=True, exist_ok=True)
+
+        # 3. 加载音频文件
+        logger.info(f"加载音频文件: {audio_path}")
+        audio = AudioSegment.from_file(audio_path)
+
+        # 4. 对每个说话人提取最佳样本
+        speaker_samples: dict[str, VoiceSample] = {}
+        total_quality = 0.0
+        total_duration = 0.0
+
+        for speaker_id, segments in speaker_segments.items():
+            logger.info(f"处理说话人 {speaker_id}, 共 {len(segments)} 个片段")
+
+            # 评分并选择最佳片段
+            best_segment = self._select_best_segment(segments)
+            if best_segment is None:
+                logger.warning(f"说话人 {speaker_id} 没有符合条件的片段")
+                continue
+
+            # 创建说话人目录
+            speaker_dir = voice_samples_dir / speaker_id
+            speaker_dir.mkdir(parents=True, exist_ok=True)
+
+            # 提取并保存音频片段
+            sample_path = speaker_dir / "sample_001.wav"
+            self._extract_audio_segment(
+                audio, best_segment.start, best_segment.end, sample_path
+            )
+
+            # 计算评分和指标
+            duration = best_segment.end - best_segment.start
+            words_count = len(best_segment.text.split())
+            speech_rate = words_count / duration if duration > 0 else 0
+            text = best_segment.text
+
+            quality_score = self.scorer.calculate_quality_score(
+                duration=duration,
+                speech_rate=speech_rate,
+                text=text,
+                words_count=words_count,
+                min_duration=self.min_duration,
+                max_duration=self.max_duration,
+            )
+
+            # 判断文本特征
+            sentence_endings = (".", "。", "!", "！", "?", "？", ";", "；")
+            is_complete = text.strip().endswith(sentence_endings)
+            has_meaningful = len(text.strip()) > 20 or words_count >= 5
+
+            # 创建样本对象
+            sample = VoiceSample(
+                speaker_id=speaker_id,
+                audio_path=str(sample_path.relative_to(output_dir)),
+                text_content=text,
+                start_time=best_segment.start,
+                end_time=best_segment.end,
+                duration=duration,
+                quality_score=quality_score,
+                words_count=words_count,
+                speech_rate=speech_rate,
+                is_complete_sentence=is_complete,
+                has_meaningful_content=has_meaningful,
+                recommended_use=self.scorer.get_recommendation(quality_score),
+            )
+
+            speaker_samples[speaker_id] = sample
+            total_quality += quality_score
+            total_duration += duration
+
+            logger.info(
+                f"  {speaker_id}: 提取样本 {duration:.1f}s, 评分 {quality_score:.1f}"
+            )
+
+        # 5. 构建结果
+        total_samples = len(speaker_samples)
+        avg_quality = total_quality / total_samples if total_samples > 0 else 0
+        avg_duration = total_duration / total_samples if total_samples > 0 else 0
+        success_rate = total_samples / len(speaker_segments) if speaker_segments else 0
+
+        result = VoiceExtractionResult(
+            speaker_samples=speaker_samples,
+            total_speakers=len(speaker_segments),
+            total_samples=total_samples,
+            extraction_summary={
+                "average_quality": round(avg_quality, 2),
+                "average_duration": round(avg_duration, 2),
+                "success_rate": success_rate,
+            },
+        )
+
+        logger.info(
+            f"声音样本提取完成: {total_samples} 个样本, 平均评分 {avg_quality:.1f}"
+        )
+
+        return result
+
+    def _group_segments_by_speaker(
+        self, asr_result: "ASRResult"
+    ) -> dict[str, list["Segment"]]:
+        """按说话人分组segments
+
+        Args:
+            asr_result: ASR结果
+
+        Returns:
+            按说话人ID分组的segment字典
+        """
+        from podtrans.asr.schemas import Segment
+
+        speaker_segments: dict[str, list[Segment]] = {}
+
+        for segment in asr_result.segments:
+            if segment.speaker is None:
+                continue
+
+            if segment.speaker not in speaker_segments:
+                speaker_segments[segment.speaker] = []
+
+            speaker_segments[segment.speaker].append(segment)
+
+        return speaker_segments
+
+    def _select_best_segment(self, segments: list["Segment"]) -> "Segment | None":
+        """选择最佳片段
+
+        按评分排序，选择评分最高的片段。
+
+        Args:
+            segments: 候选片段列表
+
+        Returns:
+            评分最高的片段，如果没有符合条件的片段则返回None
+        """
+        # 过滤时长不符合要求的片段
+        valid_segments = [
+            seg
+            for seg in segments
+            if self.min_duration <= (seg.end - seg.start) <= self.max_duration
+        ]
+
+        # 如果没有完美时长的片段，放宽条件：选择最长的片段（至少2秒）
+        if not valid_segments:
+            valid_segments = [seg for seg in segments if (seg.end - seg.start) >= 2.0]
+
+        if not valid_segments:
+            return None
+
+        # 计算每个片段的评分
+        scored_segments = []
+        for seg in valid_segments:
+            duration = seg.end - seg.start
+            words_count = len(seg.text.split())
+            speech_rate = words_count / duration if duration > 0 else 0
+
+            score = self.scorer.calculate_quality_score(
+                duration=duration,
+                speech_rate=speech_rate,
+                text=seg.text,
+                words_count=words_count,
+                min_duration=self.min_duration,
+                max_duration=self.max_duration,
+            )
+            scored_segments.append((seg, score))
+
+        # 按评分降序排序
+        scored_segments.sort(key=lambda x: x[1], reverse=True)
+
+        return scored_segments[0][0] if scored_segments else None
+
+    def _extract_audio_segment(
+        self,
+        audio: AudioSegment,
+        start_time: float,
+        end_time: float,
+        output_path: Path,
+    ) -> None:
+        """切割并保存音频片段
+
+        Args:
+            audio: 原始音频对象
+            start_time: 开始时间（秒）
+            end_time: 结束时间（秒）
+            output_path: 输出文件路径
+        """
+        # pydub 使用毫秒
+        start_ms = int(start_time * 1000)
+        end_ms = int(end_time * 1000)
+
+        segment = audio[start_ms:end_ms]
+        segment.export(output_path, format="wav")
+
+        logger.debug(f"音频片段已保存: {output_path} ({end_time - start_time:.1f}s)")

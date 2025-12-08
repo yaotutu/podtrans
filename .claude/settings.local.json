@@ -67,7 +67,14 @@
       "Bash(/home/yaotutu/miniconda3/envs/podtrans/bin/podtrans rss:*)",
       "Bash(curl:*)",
       "Bash(pkill:*)",
-      "Bash(/home/yaotutu/miniconda3/envs/podtrans/bin/pip install:*)"
+      "Bash(/home/yaotutu/miniconda3/envs/podtrans/bin/pip install:*)",
+      "Bash(/home/yaotutu/miniconda3/envs/podtrans/bin/podtrans process-asr:*)",
+      "Bash(sqlite3:*)",
+      "Bash(/home/yaotutu/miniconda3/envs/podtrans/bin/podtrans status:*)",
+      "Bash(/home/yaotutu/miniconda3/envs/podtrans/bin/podtrans:*)",
+      "Bash(/home/yaotutu/miniconda3/envs/podtrans/bin/ruff check:*)",
+      "Bash(/home/yaotutu/miniconda3/envs/podtrans/bin/ruff format src/podtrans/asr/voice_sample.py src/podtrans/cli.py)",
+      "Bash(/home/yaotutu/miniconda3/envs/podtrans/bin/ruff format:*)"
     ],
     "deny": [],
     "ask": []

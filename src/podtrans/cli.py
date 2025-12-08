@@ -3,9 +3,9 @@
 This module provides the CLI commands using Typer.
 """
 
-from pathlib import Path
 import asyncio
 from datetime import datetime
+from pathlib import Path
 
 import typer
 from loguru import logger
@@ -14,16 +14,12 @@ from rich.panel import Panel
 from rich.table import Table
 
 from podtrans.asr import WhisperXHandler
-from podtrans.asr.schemas import ASRResult
 from podtrans.config import get_settings
-from podtrans.models import PipelineMetadata, StageStatus
 from podtrans.translation import Translator
 from podtrans.translation.schemas import TranslationResult
-from podtrans.tts.factory import create_tts_service, create_simple_tts_service
+from podtrans.tts.factory import create_tts_service
 from podtrans.tts.schemas import SpeakerConfig
-from podtrans.utils.audio import get_audio_duration, validate_audio_file
 from podtrans.utils.file import read_json, write_json
-from podtrans.pipeline.orchestrator import PipelineOrchestrator
 
 app = typer.Typer(
     name="podtrans",
@@ -31,159 +27,6 @@ app = typer.Typer(
     add_completion=False,
 )
 console = Console()
-
-
-@app.command()
-def translate(
-    asr_json: Path = typer.Argument(
-        ...,
-        exists=True,
-        help="Path to ASR result JSON file",
-    ),
-    output: Path | None = typer.Option(
-        None,
-        "--output",
-        "-o",
-        help="Output directory (default: same as ASR result directory)",
-    ),
-    source_lang: str = typer.Option(
-        "en",
-        "--source",
-        "-s",
-        help="Source language code (e.g., 'en')",
-    ),
-    target_lang: str = typer.Option(
-        "zh",
-        "--target",
-        "-t",
-        help="Target language code (e.g., 'zh')",
-    ),
-) -> None:
-    """Translate ASR result to target language.
-
-    This command translates the transcription result from ASR to the target language
-    using OpenAI-compatible API (DashScope).
-
-    Example:
-        podtrans translate data/output/demo/asr_result.json
-
-        podtrans translate asr_result.json -o ./translation -s en -t zh
-    """
-    settings = get_settings()
-
-    # Display header
-    console.print("\n[bold blue]🌐 PodTrans - Translation[/bold blue]\n")
-    console.print(f"[dim]ASR result:[/dim] {asr_json}")
-    console.print(f"[dim]Translation:[/dim] {source_lang} → {target_lang}\n")
-
-    # Check API key
-    if not settings.dashscope_api_key:
-        console.print(
-            "[bold red]❌ Error: DASHSCOPE_API_KEY not set[/bold red]\n"
-            "[dim]Please set your DashScope API key in .env file:[/dim]\n"
-            "DASHSCOPE_API_KEY=your_api_key_here\n"
-        )
-        raise typer.Exit(1)
-
-    # Determine output directory
-    if output is None:
-        output_dir = asr_json.parent
-    else:
-        output_dir = Path(output)
-
-    output_dir.mkdir(parents=True, exist_ok=True)
-    console.print(f"[dim]Output directory:[/dim] {output_dir}\n")
-
-    # Initialize translator
-    console.print("[bold cyan]🔧 Initializing translator...[/bold cyan]")
-    try:
-        translator = Translator(settings)
-        console.print(f"[green]✓[/green] Model: {translator.model}")
-        console.print(f"[green]✓[/green] API base: {settings.translation_api_base}")
-        console.print(
-            f"[green]✓[/green] Max segments/batch: {settings.translation_max_segments_per_batch}\n"
-        )
-    except Exception as e:
-        console.print(f"[bold red]❌ Failed to initialize translator: {e}[/bold red]")
-        raise typer.Exit(1)
-
-    # Load ASR result
-    console.print("[bold cyan]📖 Loading ASR result...[/bold cyan]")
-    try:
-        asr_result = translator.load_asr_result(asr_json)
-        console.print(f"[green]✓[/green] Loaded {asr_result.total_segments} segments")
-        console.print(
-            f"[green]✓[/green] Detected {asr_result.speaker_count} speakers\n"
-        )
-    except Exception as e:
-        console.print(f"[bold red]❌ Failed to load ASR result: {e}[/bold red]")
-        raise typer.Exit(1)
-
-    # Run translation
-    console.print("[bold cyan]🚀 Starting translation...[/bold cyan]\n")
-
-    try:
-        translation_result = translator.translate_asr_result(
-            asr_result, source_lang, target_lang
-        )
-
-        # Save results
-        console.print("\n[bold cyan]💾 Saving results...[/bold cyan]")
-
-        output_base = output_dir / "translation_result"
-        translator.save_result(
-            translation_result,
-            output_base,
-            save_bilingual=True,
-        )
-
-        # Display summary
-        console.print("\n" + "=" * 60)
-        console.print("[bold green]✨ Translation Complete![/bold green]\n")
-
-        # Create summary table
-        table = Table(show_header=False, box=None)
-        table.add_column("Key", style="cyan")
-        table.add_column("Value", style="white")
-
-        table.add_row("Model", translation_result.model_name)
-        table.add_row(
-            "Languages",
-            f"{translation_result.source_language} → {translation_result.target_language}",
-        )
-        table.add_row("Segments", str(translation_result.total_segments))
-        table.add_row("Speakers", str(translation_result.speaker_count))
-        table.add_row("Output", str(output_dir))
-
-        console.print(table)
-        console.print("\n" + "=" * 60 + "\n")
-
-        # Show preview
-        if translation_result.segments:
-            console.print("[bold]📄 Preview (first 3 segments):[/bold]\n")
-            for seg in translation_result.segments[:3]:
-                speaker_label = f"[{seg.speaker}]" if seg.speaker else "[Unknown]"
-                console.print(
-                    f"[dim]{seg.start:.2f}s - {seg.end:.2f}s[/dim] "
-                    f"[cyan]{speaker_label}[/cyan]"
-                )
-                console.print(f"  [dim]EN:[/dim] {seg.original_text}")
-                console.print(f"  [dim]ZH:[/dim] {seg.translated_text}\n")
-
-            if len(translation_result.segments) > 3:
-                remaining = len(translation_result.segments) - 3
-                console.print(f"[dim]... and {remaining} more segments[/dim]")
-
-        console.print()
-
-    except KeyboardInterrupt:
-        console.print("\n[yellow]⚠️  Interrupted by user[/yellow]")
-        raise typer.Exit(1)
-
-    except Exception as e:
-        console.print(f"\n[bold red]❌ Translation failed: {e}[/bold red]")
-        logger.exception("Translation error")
-        raise typer.Exit(1)
 
 
 @app.command()
@@ -233,7 +76,8 @@ def synthesize(
     """Generate podcast audio from translation result using SoulX CLI.
 
     This command synthesizes audio from the translated text using the SoulX-Podcast
-    CLI TTS service, preserving speaker information and generating natural-sounding podcast audio.
+    CLI TTS service, preserving speaker information and generating natural-sounding
+    podcast audio.
 
     Examples:
         # Basic usage
@@ -387,9 +231,8 @@ def synthesize(
     console.print(
         f"[green]✓[/green] Translation segments: {len(translation_result.segments)}"
     )
-    console.print(
-        f"[green]✓[/green] Speakers: {len(set(s.speaker for s in translation_result.segments if s.speaker))}\n"
-    )
+    speakers = set(s.speaker for s in translation_result.segments if s.speaker)
+    console.print(f"[green]✓[/green] Speakers: {len(speakers)}\n")
 
     # Synthesize audio
     console.print("[bold cyan]🚀 Synthesizing audio...[/bold cyan]")
@@ -468,8 +311,8 @@ def rss(
 ) -> None:
     """Download podcast episodes from RSS feeds.
 
-    This command downloads audio files from RSS feeds and saves them to the data directory.
-    It only performs download, no ASR/translation processing.
+    This command downloads audio files from RSS feeds and saves them to the
+    data directory. It only performs download, no ASR/translation processing.
 
     Use 'podtrans asr' after this to process downloaded episodes.
     Use 'podtrans status' to check progress.
@@ -514,7 +357,9 @@ def rss(
 
         if success:
             console.print("\n[bold green]✅ RSS download completed![/bold green]")
-            console.print("[dim]Run 'podtrans asr' to process downloaded episodes[/dim]")
+            console.print(
+                "[dim]Run 'podtrans asr' to process downloaded episodes[/dim]"
+            )
             console.print("[dim]Run 'podtrans status' to check progress[/dim]\n")
         else:
             console.print("\n[bold red]❌ RSS download failed[/bold red]")
@@ -540,10 +385,7 @@ def version() -> None:
 
 
 def _create_episode_summary(
-    episode_dir: Path,
-    episode,
-    segment_files: list[Path],
-    pipeline_results: list
+    episode_dir: Path, episode, segment_files: list[Path], pipeline_results: list
 ) -> None:
     """Create episode summary JSON with all segments information.
 
@@ -560,10 +402,11 @@ def _create_episode_summary(
     total_duration = 0
     segment_info = []
 
-    for i, (segment_file, pipeline_meta) in enumerate(zip(segment_files, pipeline_results)):
+    for i, (segment_file, pipeline_meta) in enumerate(
+        zip(segment_files, pipeline_results, strict=True)
+    ):
         # Get segment info from pipeline metadata
-        segment_id = f"{episode_dir.name}_part_{i+1:03d}"
-        segment_dir = episode_dir / segment_id
+        segment_id = f"{episode_dir.name}_part_{i + 1:03d}"
 
         # Count speakers and segments from ASR result
         asr_stage = pipeline_meta.get_stage("asr")
@@ -574,16 +417,18 @@ def _create_episode_summary(
         segment_size = segment_file.stat().st_size if segment_file.exists() else 0
         total_duration += pipeline_meta.audio_duration or 0
 
-        segment_info.append({
-            "segment_id": segment_id,
-            "segment_index": i + 1,
-            "audio_file": segment_file.name,
-            "file_size": segment_size,
-            "duration": pipeline_meta.audio_duration,
-            "speakers": speaker_count,
-            "segments": segment_count,
-            "status": "completed"
-        })
+        segment_info.append(
+            {
+                "segment_id": segment_id,
+                "segment_index": i + 1,
+                "audio_file": segment_file.name,
+                "file_size": segment_size,
+                "duration": pipeline_meta.audio_duration,
+                "speakers": speaker_count,
+                "segments": segment_count,
+                "status": "completed",
+            }
+        )
 
     # Create episode summary
     episode_summary = {
@@ -596,12 +441,14 @@ def _create_episode_summary(
         "total_duration": total_duration,
         "total_size": sum(seg["file_size"] for seg in segment_info),
         "segments": segment_info,
-        "processing_status": "completed" if len(segment_files) == len(pipeline_results) else "partial"
+        "processing_status": "completed"
+        if len(segment_files) == len(pipeline_results)
+        else "partial",
     }
 
     # Save to episode directory
     summary_file = episode_dir / "episode_summary.json"
-    with open(summary_file, 'w', encoding='utf-8') as f:
+    with open(summary_file, "w", encoding="utf-8") as f:
         json.dump(episode_summary, f, ensure_ascii=False, indent=2)
 
     logger.info(f"Episode summary saved to {summary_file}")
@@ -645,18 +492,6 @@ def asr(
 
     db = DatabaseManager(db_path, init_db=False)
 
-    # Query pending episodes
-    episodes = db.get_pending_episodes(stage='asr')
-
-    # Filter by retry count
-    episodes = [ep for ep in episodes if ep.get('retry_count', 0) < max_retries]
-
-    if not episodes:
-        console.print("[green]✅ No episodes pending for ASR processing[/green]")
-        return
-
-    console.print(f"[cyan]Found {len(episodes)} episodes to process[/cyan]\n")
-
     # Initialize ASR handler
     settings = get_settings()
     handler = WhisperXHandler(
@@ -668,15 +503,37 @@ def asr(
 
     success_count = 0
     failed_count = 0
+    processed_ids: set[int] = set()  # Track processed episodes to avoid duplicates
 
-    # Process each episode
-    for idx, episode in enumerate(episodes, 1):
-        episode_id = episode['id']
-        episode_title = episode['episode_title']
-        audio_path = Path(episode['audio_path'])
-        episode_dir = Path(episode['episode_dir'])
+    # Process episodes with dynamic query
+    while True:
+        # Query pending episodes each iteration
+        episodes = db.get_pending_episodes(stage="asr")
+        episodes = [
+            ep
+            for ep in episodes
+            if ep.get("retry_count", 0) < max_retries and ep["id"] not in processed_ids
+        ]
 
-        console.print(f"[bold]Processing [{idx}/{len(episodes)}][/bold]: {episode_title}")
+        if not episodes:
+            if success_count == 0 and failed_count == 0:
+                console.print(
+                    "[green]✅ No episodes pending for ASR processing[/green]"
+                )
+            break
+
+        episode = episodes[0]
+        processed_ids.add(episode["id"])
+
+        episode_id = episode["id"]
+        episode_title = episode["episode_title"]
+        audio_path = Path(episode["audio_path"])
+        episode_dir = Path(episode["episode_dir"])
+
+        total_pending = len(episodes)
+        console.print(
+            f"[bold]Processing[/bold] (pending: {total_pending}): {episode_title}"
+        )
         console.print(f"[dim]Audio: {audio_path}[/dim]")
 
         try:
@@ -696,13 +553,43 @@ def asr(
             result_path = episode_dir / "asr_result.json"
             write_json(asr_result.model_dump(), result_path)
 
+            # Extract voice samples for each speaker
+            from podtrans.asr.voice_sample import VoiceSampleExtractor
+
+            console.print("[dim]Extracting voice samples...[/dim]")
+            extractor = VoiceSampleExtractor()
+            try:
+                voice_result = extractor.extract_samples(
+                    audio_path=audio_path,
+                    asr_result=asr_result,
+                    output_dir=episode_dir,
+                )
+
+                # Save voice samples metadata
+                voice_samples_path = episode_dir / "voice_samples.json"
+                write_json(voice_result.model_dump(), voice_samples_path)
+
+                avg_q = voice_result.extraction_summary.get("average_quality", 0)
+                console.print(
+                    f"[dim]Voice samples: {voice_result.total_samples} samples, "
+                    f"avg quality {avg_q:.1f}[/dim]"
+                )
+            except Exception as voice_err:
+                logger.warning(f"声音样本提取失败: {voice_err}")
+                console.print(
+                    f"[yellow]⚠️  Voice sample extraction failed: {voice_err}[/yellow]"
+                )
+
             # Update database
-            db.update_episode_status(episode_id, {
-                'asr_completed': True,
-                'asr_result_path': str(result_path),
-                'asr_timestamp': datetime.now(),
-                'retry_count': 0,  # Reset retry count on success
-            })
+            db.update_episode_status(
+                episode_id,
+                {
+                    "asr_completed": True,
+                    "asr_result_path": str(result_path),
+                    "asr_timestamp": datetime.now(),
+                    "retry_count": 0,  # Reset retry count on success
+                },
+            )
 
             success_count += 1
             console.print(f"[green]✅ Success[/green]: {result_path}\n")
@@ -713,23 +600,229 @@ def asr(
             error_msg = str(e)
 
             # Update database with error
-            current_retry = episode.get('retry_count', 0)
-            db.update_episode_status(episode_id, {
-                'retry_count': current_retry + 1,
-                'error_count': episode.get('error_count', 0) + 1,
-                'last_error': error_msg,
-            })
+            current_retry = episode.get("retry_count", 0)
+            db.update_episode_status(
+                episode_id,
+                {
+                    "retry_count": current_retry + 1,
+                    "error_count": episode.get("error_count", 0) + 1,
+                    "last_error": error_msg,
+                },
+            )
 
             console.print(f"[red]❌ Failed[/red]: {error_msg}\n")
             logger.error(f"ASR处理失败: {episode_title}: {error_msg}")
 
     # Print summary
-    console.print("\n" + "="*50)
-    console.print(f"[bold]Processing Summary[/bold]")
-    console.print(f"  Total: {len(episodes)}")
-    console.print(f"  [green]Success: {success_count}[/green]")
-    console.print(f"  [red]Failed: {failed_count}[/red]")
-    console.print("="*50 + "\n")
+    if success_count > 0 or failed_count > 0:
+        console.print("\n" + "=" * 50)
+        console.print("[bold]Processing Summary[/bold]")
+        console.print(f"  Total: {success_count + failed_count}")
+        console.print(f"  [green]Success: {success_count}[/green]")
+        console.print(f"  [red]Failed: {failed_count}[/red]")
+        console.print("=" * 50 + "\n")
+
+
+@app.command()
+def translation(
+    data_dir: Path = typer.Option(
+        Path("./data"),
+        "--data-dir",
+        "-d",
+        help="Data directory path",
+    ),
+    max_retries: int = typer.Option(
+        3,
+        "--max-retries",
+        help="Maximum retry count for failed episodes",
+    ),
+    source_lang: str = typer.Option(
+        "en",
+        "--source",
+        "-s",
+        help="Source language code (e.g., 'en')",
+    ),
+    target_lang: str = typer.Option(
+        "zh",
+        "--target",
+        "-t",
+        help="Target language code (e.g., 'zh')",
+    ),
+) -> None:
+    """Batch process translation for all ASR-completed episodes.
+
+    This command:
+    - Queries database for episodes with asr_completed=True and
+      translation_completed=False
+    - Processes each episode with Qwen translation
+    - Saves results to episode directory
+    - Updates database with completion status
+
+    Example:
+        podtrans translation
+        podtrans translation --data-dir ./data --max-retries 5
+        podtrans translation -s en -t zh
+    """
+    from podtrans.services.database import DatabaseManager
+
+    console.print("\n[bold blue]🌐 PodTrans - Batch Translation[/bold blue]\n")
+
+    # Check API key
+    settings = get_settings()
+    if not settings.dashscope_api_key:
+        console.print(
+            "[bold red]❌ Error: DASHSCOPE_API_KEY not set[/bold red]\n"
+            "[dim]Please set your DashScope API key in .env file:[/dim]\n"
+            "DASHSCOPE_API_KEY=your_api_key_here\n"
+        )
+        raise typer.Exit(1)
+
+    # Initialize database
+    db_path = data_dir / "episodes.db"
+    if not db_path.exists():
+        console.print(f"[bold red]❌ Database not found: {db_path}[/bold red]")
+        raise typer.Exit(1)
+
+    db = DatabaseManager(db_path, init_db=False)
+
+    console.print(f"[dim]Translation: {source_lang} → {target_lang}[/dim]\n")
+
+    # Initialize translator
+    console.print("[bold cyan]🔧 Initializing translator...[/bold cyan]")
+    try:
+        translator = Translator(settings)
+        console.print(f"[green]✓[/green] Model: {translator.model}")
+        console.print(f"[green]✓[/green] API base: {settings.translation_api_base}")
+        console.print(
+            f"[green]✓[/green] Max segments/batch: "
+            f"{settings.translation_max_segments_per_batch}\n"
+        )
+    except Exception as e:
+        console.print(f"[bold red]❌ Failed to initialize translator: {e}[/bold red]")
+        raise typer.Exit(1)
+
+    success_count = 0
+    failed_count = 0
+    processed_ids: set[int] = set()  # Track processed episodes to avoid duplicates
+
+    # Process episodes with dynamic query
+    while True:
+        # Query pending episodes each iteration
+        episodes = db.get_pending_episodes(stage="translation")
+        episodes = [
+            ep
+            for ep in episodes
+            if ep.get("retry_count", 0) < max_retries and ep["id"] not in processed_ids
+        ]
+
+        if not episodes:
+            if success_count == 0 and failed_count == 0:
+                console.print("[green]✅ No episodes pending for translation[/green]")
+            break
+
+        episode = episodes[0]
+        processed_ids.add(episode["id"])
+
+        episode_id = episode["id"]
+        episode_title = episode["episode_title"]
+        asr_result_path = Path(episode["asr_result_path"])
+        episode_dir = Path(episode["episode_dir"])
+
+        total_pending = len(episodes)
+        console.print(
+            f"[bold]Translating[/bold] (pending: {total_pending}): {episode_title}"
+        )
+        console.print(f"[dim]ASR result: {asr_result_path}[/dim]")
+
+        try:
+            # Check if ASR result file exists
+            if not asr_result_path.exists():
+                raise FileNotFoundError(f"ASR result not found: {asr_result_path}")
+
+            # Load ASR result
+            logger.info(f"开始翻译: {episode_title}")
+            asr_result = translator.load_asr_result(asr_result_path)
+            seg_count = asr_result.total_segments
+            spk_count = asr_result.speaker_count
+            console.print(f"[dim]Segments: {seg_count}, Speakers: {spk_count}[/dim]")
+
+            # Translate
+            translation_result = translator.translate_asr_result(
+                asr_result, source_lang, target_lang
+            )
+
+            # Save result
+            result_path = episode_dir / "translation_result"
+            translator.save_result(
+                translation_result,
+                result_path,
+                save_bilingual=True,
+            )
+
+            # Update database
+            db.update_episode_status(
+                episode_id,
+                {
+                    "translation_completed": True,
+                    "translation_result_path": str(result_path.with_suffix(".json")),
+                    "translation_timestamp": datetime.now(),
+                    "retry_count": 0,  # Reset retry count on success
+                },
+            )
+
+            success_count += 1
+            console.print(f"[green]✅ Success[/green]: {result_path}.json\n")
+            logger.info(f"翻译成功: {episode_title}")
+
+        except KeyboardInterrupt:
+            console.print("\n[yellow]⚠️  Interrupted by user[/yellow]")
+            raise typer.Exit(1)
+
+        except Exception as e:
+            from podtrans.translation.translator import ContentBlockedError
+
+            failed_count += 1
+
+            # Check if it's a content blocked error
+            if isinstance(e, ContentBlockedError):
+                error_msg = f"[内容审核] {str(e)}"
+                # Don't increment retry_count for content blocked errors
+                # These need manual review, not retry
+                db.update_episode_status(
+                    episode_id,
+                    {
+                        "error_count": episode.get("error_count", 0) + 1,
+                        "last_error": error_msg,
+                    },
+                )
+                console.print(
+                    "[yellow]⚠️  Content Blocked[/yellow]: "
+                    "内容审核未通过，已标记等待人工处理\n"
+                )
+            else:
+                error_msg = str(e)
+                # Update database with error
+                current_retry = episode.get("retry_count", 0)
+                db.update_episode_status(
+                    episode_id,
+                    {
+                        "retry_count": current_retry + 1,
+                        "error_count": episode.get("error_count", 0) + 1,
+                        "last_error": error_msg,
+                    },
+                )
+                console.print(f"[red]❌ Failed[/red]: {error_msg}\n")
+
+            logger.error(f"翻译失败: {episode_title}: {error_msg}")
+
+    # Print summary
+    if success_count > 0 or failed_count > 0:
+        console.print("\n" + "=" * 50)
+        console.print("[bold]Translation Summary[/bold]")
+        console.print(f"  Total: {success_count + failed_count}")
+        console.print(f"  [green]Success: {success_count}[/green]")
+        console.print(f"  [red]Failed: {failed_count}[/red]")
+        console.print("=" * 50 + "\n")
 
 
 def _format_file_size(size_bytes: int) -> str:
@@ -761,14 +854,11 @@ def _format_duration(seconds: float) -> str:
 def _render_status_display(data_dir: Path, show_episodes: bool = False) -> None:
     """渲染状态显示（用于刷新）"""
     import sqlite3
-    from rich.progress import Progress, BarColumn, TextColumn
-    from rich.layout import Layout
-    from rich.live import Live
 
     db_path = data_dir / "episodes.db"
     if not db_path.exists():
         console.print(f"[bold red]❌ Database not found: {db_path}[/bold red]")
-        console.print(f"[dim]Run 'podtrans rss' first to download episodes[/dim]\n")
+        console.print("[dim]Run 'podtrans rss' first to download episodes[/dim]\n")
         return
 
     conn = sqlite3.connect(db_path)
@@ -782,16 +872,16 @@ def _render_status_display(data_dir: Path, show_episodes: bool = False) -> None:
 
     # 统计数据
     total = len(all_episodes)
-    download_done = sum(1 for ep in all_episodes if ep['download_completed'])
-    asr_done = sum(1 for ep in all_episodes if ep['asr_completed'])
-    trans_done = sum(1 for ep in all_episodes if ep['translation_completed'])
-    tts_done = sum(1 for ep in all_episodes if ep['tts_completed'])
+    download_done = sum(1 for ep in all_episodes if ep["download_completed"])
+    asr_done = sum(1 for ep in all_episodes if ep["asr_completed"])
+    trans_done = sum(1 for ep in all_episodes if ep["translation_completed"])
+    tts_done = sum(1 for ep in all_episodes if ep["tts_completed"])
 
     # 计算总文件大小
-    total_size = sum(ep['file_size'] or 0 for ep in all_episodes)
+    total_size = sum(ep["file_size"] or 0 for ep in all_episodes)
 
     # 统计错误
-    error_count = sum(1 for ep in all_episodes if ep['last_error'])
+    error_count = sum(1 for ep in all_episodes if ep["last_error"])
 
     conn.close()
 
@@ -809,7 +899,9 @@ def _render_status_display(data_dir: Path, show_episodes: bool = False) -> None:
 
     overview_table.add_row("Total Episodes", str(total))
     overview_table.add_row("Total Size", _format_file_size(total_size))
-    overview_table.add_row("Errors", f"[red]{error_count}[/red]" if error_count else "[green]0[/green]")
+    overview_table.add_row(
+        "Errors", f"[red]{error_count}[/red]" if error_count else "[green]0[/green]"
+    )
 
     console.print(overview_table)
     console.print()
@@ -831,7 +923,8 @@ def _render_status_display(data_dir: Path, show_episodes: bool = False) -> None:
             bar_width = 30
             filled = int(bar_width * completed / total) if total > 0 else 0
             bar = "█" * filled + "░" * (bar_width - filled)
-            console.print(f"  {stage_name:12} [{color}]{bar}[/{color}] {completed}/{total} ({pct:.0f}%)")
+            stats = f"{completed}/{total} ({pct:.0f}%)"
+            console.print(f"  {stage_name:12} [{color}]{bar}[/{color}] {stats}")
 
         console.print()
 
@@ -848,25 +941,37 @@ def _render_status_display(data_dir: Path, show_episodes: bool = False) -> None:
 
         for idx, ep in enumerate(all_episodes[:10], 1):  # 只显示最近10个
             # 状态图标
-            d = "✅" if ep['download_completed'] else "⏳"
-            a = "✅" if ep['asr_completed'] else ("⏳" if ep['download_completed'] else "⬜")
-            t = "✅" if ep['translation_completed'] else ("⏳" if ep['asr_completed'] else "⬜")
-            s = "✅" if ep['tts_completed'] else ("⏳" if ep['translation_completed'] else "⬜")
+            d = "✅" if ep["download_completed"] else "⏳"
+            a = (
+                "✅"
+                if ep["asr_completed"]
+                else ("⏳" if ep["download_completed"] else "⬜")
+            )
+            t = (
+                "✅"
+                if ep["translation_completed"]
+                else ("⏳" if ep["asr_completed"] else "⬜")
+            )
+            s = (
+                "✅"
+                if ep["tts_completed"]
+                else ("⏳" if ep["translation_completed"] else "⬜")
+            )
 
             status_str = f"{d}→{a}→{t}→{s}"
 
             # 如果有错误，添加红色标记
-            if ep['last_error']:
+            if ep["last_error"]:
                 status_str += " [red]⚠[/red]"
 
             # 文件大小
-            size_str = _format_file_size(ep['file_size']) if ep['file_size'] else "-"
+            size_str = _format_file_size(ep["file_size"]) if ep["file_size"] else "-"
 
             # 更新时间
-            updated = ep['updated_at'][:16] if ep['updated_at'] else "-"
+            updated = ep["updated_at"][:16] if ep["updated_at"] else "-"
 
             # 标题截断
-            title = ep['episode_title']
+            title = ep["episode_title"]
             if len(title) > 40:
                 title = title[:37] + "..."
 
@@ -875,12 +980,14 @@ def _render_status_display(data_dir: Path, show_episodes: bool = False) -> None:
         console.print(ep_table)
 
         if len(all_episodes) > 10:
-            console.print(f"\n[dim]... and {len(all_episodes) - 10} more episodes[/dim]")
+            console.print(
+                f"\n[dim]... and {len(all_episodes) - 10} more episodes[/dim]"
+            )
 
     console.print()
 
     # 错误详情
-    errors = [ep for ep in all_episodes if ep['last_error']]
+    errors = [ep for ep in all_episodes if ep["last_error"]]
     if errors:
         console.print(f"[bold red]Errors ({len(errors)})[/bold red]\n")
         for ep in errors[:3]:  # 只显示最近3个错误
@@ -935,7 +1042,9 @@ def status(
         try:
             while True:
                 _render_status_display(data_dir, show_episodes=episodes)
-                console.print(f"[dim]Refreshing every {interval}s... (Ctrl+C to exit)[/dim]")
+                console.print(
+                    f"[dim]Refreshing every {interval}s... (Ctrl+C to exit)[/dim]"
+                )
                 time.sleep(interval)
         except KeyboardInterrupt:
             console.print("\n[dim]Stopped watching[/dim]")
