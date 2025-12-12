@@ -378,6 +378,101 @@ class VoiceSampleExtractor:
 
         return result
 
+    def save_speaker_info_to_dirs(self, voice_result: VoiceExtractionResult, output_dir: Path) -> None:
+        """将voice sample信息保存到各个说话人的子目录中
+
+        Args:
+            voice_result: VoiceExtractionResult提取结果
+            output_dir: 输出目录（voice_samples的父目录）
+        """
+        import json
+        from datetime import datetime
+
+        voice_samples_dir = output_dir / "voice_samples"
+        if not voice_samples_dir.exists():
+            logger.warning(f"voice_samples目录不存在: {voice_samples_dir}")
+            return
+
+        logger.info(f"开始保存voice sample信息到各个说话人目录")
+
+        for speaker_id, sample in voice_result.speaker_samples.items():
+            speaker_dir = voice_samples_dir / speaker_id
+
+            if speaker_dir.exists():
+                # 创建说话人特定的数据
+                speaker_data = {
+                    "speaker_id": speaker_id,
+                    "audio_file": f"voice_samples/{speaker_id}/sample_001.wav",
+                    "time_range": {
+                        "start": sample.start_time,
+                        "end": sample.end_time,
+                        "duration": sample.duration
+                    },
+                    "text_content": sample.text_content,
+                    "quality_metrics": {
+                        "score": sample.quality_score,
+                        "words_count": sample.words_count,
+                        "speech_rate": sample.speech_rate
+                    },
+                    "metadata": {
+                        "is_complete_sentence": True,  # 从提取逻辑可以推断
+                        "has_meaningful_content": True,
+                        "extraction_time": datetime.now().isoformat(),
+                        "recommended_use": "推荐使用：高质量的克隆样本，适合作为主要训练素材" if sample.quality_score >= 80 else "可用样本，建议结合其他样本使用"
+                    }
+                }
+
+                # 保存 JSON 文件
+                info_json_path = speaker_dir / "voice_sample_info.json"
+                with open(info_json_path, 'w', encoding='utf-8') as f:
+                    json.dump(speaker_data, f, ensure_ascii=False, indent=2)
+
+                # 保存纯文本文件
+                info_txt_path = speaker_dir / "voice_sample_info.txt"
+                with open(info_txt_path, 'w', encoding='utf-8') as f:
+                    f.write(f"说话人: {speaker_id}\n")
+                    f.write(f"=" * 50 + "\n\n")
+                    f.write(f"音频文件: voice_samples/{speaker_id}/sample_001.wav\n")
+                    f.write(f"时间范围: {sample.start_time:.3f}s - {sample.end_time:.3f}s\n")
+                    f.write(f"时长: {sample.duration:.3f}s\n\n")
+                    f.write(f"文本内容:\n")
+                    f.write("-" * 20 + "\n")
+                    f.write(f"{sample.text_content}\n")
+                    f.write("-" * 50 + "\n\n")
+                    f.write(f"质量指标:\n")
+                    f.write(f"  - 质量分数: {sample.quality_score:.1f}\n")
+                    f.write(f"  - 词数: {sample.words_count}\n")
+                    f.write(f"  - 语速: {sample.speech_rate:.2f} 词/秒\n\n")
+                    f.write(f"使用建议:\n")
+                    f.write(f"  {speaker_data['metadata']['recommended_use']}\n")
+
+                logger.info(f"  ✓ {speaker_id}: 信息已保存到 {speaker_dir}")
+            else:
+                logger.warning(f"  ✗ {speaker_id}: 目录不存在 {speaker_dir}")
+
+        # 创建汇总文件
+        summary_path = output_dir / "voice_samples_summary_by_speaker.txt"
+        with open(summary_path, 'w', encoding='utf-8') as f:
+            f.write("Voice Samples 按说话人汇总\n")
+            f.write("=" * 60 + "\n\n")
+
+            # 按质量分数排序
+            sorted_samples = sorted(
+                voice_result.speaker_samples.items(),
+                key=lambda x: x[1].quality_score,
+                reverse=True
+            )
+
+            for i, (speaker_id, sample) in enumerate(sorted_samples, 1):
+                f.write(f"{i}. {speaker_id}\n")
+                f.write(f"   时间: {sample.start_time:.1f}s - {sample.end_time:.1f}s ({sample.duration:.1f}s)\n")
+                f.write(f"   质量: {sample.quality_score:.1f}/100\n")
+                f.write(f"   文本: {sample.text_content[:100]}{'...' if len(sample.text_content) > 100 else ''}\n")
+                f.write(f"   文件: voice_samples/{speaker_id}/sample_001.wav\n")
+                f.write("\n")
+
+        logger.info(f"汇总文件已保存到: {summary_path}")
+
     def _group_segments_by_speaker(
         self, asr_result: "ASRResult"
     ) -> dict[str, list["Segment"]]:

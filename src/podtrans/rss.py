@@ -37,8 +37,8 @@ def clean_title_for_folder(title: str, max_length: int = 50) -> str:
     # 1. 转小写
     cleaned = title.lower()
 
-    # 2. 移除特殊字符
-    cleaned = re.sub(r"['\"\:?!,.\(\)\[\]\{\}]", "", cleaned)
+    # 2. 移除所有特殊字符，只保留字母、数字、空格和连字符
+    cleaned = re.sub(r"[^\w\s\-]", "", cleaned)
 
     # 3. 空格替换为 -
     cleaned = re.sub(r"\s+", "-", cleaned)

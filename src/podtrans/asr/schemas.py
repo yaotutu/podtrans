@@ -42,6 +42,8 @@
     json_str = result.model_dump_json(indent=2)
 """
 
+from datetime import datetime
+from pathlib import Path
 from pydantic import BaseModel, Field
 
 
@@ -383,3 +385,95 @@ class ASRResult(BaseModel):
                 # 格式: 文本内容
                 lines.append(seg.text)
         return "\n".join(lines)
+
+
+class ASRResultSegment(BaseModel):
+    """ASR 结果片段
+
+    用于表示从完整 ASR 结果中切分出来的片段。
+
+    字段说明:
+        segment_id: 片段唯一标识符（例如 "episode_001_seg_001"）
+        episode_id: 所属剧集 ID
+        segment_index: 片段在完整结果中的索引（从 1 开始）
+        start_time: 片段在原始音频中的开始时间（秒）
+        end_time: 片段在原始音频中的结束时间（秒）
+        original_start_offset: 片段在原始音频中的起始偏移（秒）
+        segments: 片段内的转录段落列表
+        words: 片段内的词汇列表（可选）
+        speakers: 片段内的说话人集合
+        language: 检测到的语言
+        model_name: 使用的 ASR 模型名称
+        created_at: 创建时间
+        file_path: 保存路径（可选）
+    """
+
+    segment_id: str = Field(description="片段唯一标识符")
+    episode_id: str = Field(description="所属剧集 ID")
+    segment_index: int = Field(ge=1, description="片段索引（从1开始）")
+    start_time: float = Field(ge=0, description="在原始音频中的开始时间（秒）")
+    end_time: float = Field(ge=0, description="在原始音频中的结束时间（秒）")
+    original_start_offset: float = Field(ge=0, description="在原始音频中的起始偏移（秒）")
+
+    # 片段内的 ASR 结果
+    segments: list[Segment] = Field(description="转录段落列表")
+    words: list[Word] = Field(default_factory=list, description="词汇列表（可选）")
+    speakers: set[str] = Field(default_factory=set, description="片段内的说话人集合")
+    language: str = Field(description="检测到的语言")
+    model_name: str = Field(description="使用的 ASR 模型名称")
+
+    # 元数据
+    created_at: datetime = Field(default_factory=datetime.now, description="创建时间")
+    file_path: Path | None = Field(None, description="保存路径（可选）")
+
+    @property
+    def duration(self) -> float:
+        """获取片段时长（秒）"""
+        return self.end_time - self.start_time
+
+    @property
+    def total_segments(self) -> int:
+        """获取片段内的段落数"""
+        return len(self.segments)
+
+    @property
+    def speaker_count(self) -> int:
+        """获取片段内的说话人数量"""
+        return len(self.speakers)
+
+
+class ASRSplitMetadata(BaseModel):
+    """ASR 结果切分元数据
+
+    记录切分操作的整体信息。
+    """
+
+    episode_id: str = Field(description="剧集 ID")
+    total_duration: float = Field(ge=0, description="音频总时长（秒）")
+    segment_count: int = Field(ge=1, description="片段总数")
+    target_duration: float = Field(gt=0, description="目标片段时长（秒）")
+    segments: list[dict] = Field(description="片段信息列表")
+    created_at: datetime = Field(default_factory=datetime.now, description="切分时间")
+    model_name: str = Field(description="ASR 模型名称")
+
+    model_config = {
+        "json_schema_extra": {
+            "example": {
+                "episode_id": "episode_001",
+                "total_duration": 3600.0,
+                "segment_count": 6,
+                "target_duration": 600.0,
+                "segments": [
+                    {
+                        "segment_id": "segment_001",
+                        "start_time": 0.0,
+                        "end_time": 602.5,
+                        "file_name": "segment_001.json",
+                        "duration": 602.5
+                    }
+                ],
+                "created_at": "2025-12-09T12:00:00",
+                "model_name": "medium"
+            }
+        }
+    }

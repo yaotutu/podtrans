@@ -163,6 +163,66 @@ class Settings(BaseSettings):
     )
 
     # ===================================
+    # ASR Result Splitting Configuration
+    # ===================================
+    enable_asr_splitting: bool = Field(
+        default=True,
+        description="Enable ASR result splitting for long episodes",
+    )
+    asr_split_threshold: int = Field(
+        default=600,
+        ge=300,
+        le=3600,
+        description="Audio duration threshold for ASR result splitting in seconds (default: 600 = 10 minutes)",
+    )
+    asr_target_duration: int = Field(
+        default=600,
+        ge=300,
+        le=1800,
+        description="Target duration for each ASR result segment in seconds (default: 600 = 10 minutes)",
+    )
+    asr_min_duration: int = Field(
+        default=300,
+        ge=60,
+        le=600,
+        description="Minimum duration for each ASR result segment in seconds (default: 300 = 5 minutes)",
+    )
+    asr_max_duration: int = Field(
+        default=900,
+        ge=600,
+        le=3600,
+        description="Maximum duration for each ASR result segment in seconds (default: 900 = 15 minutes)",
+    )
+
+    # ===================================
+    # Segment Translation Configuration
+    # ===================================
+    enable_segment_translation: bool = Field(
+        default=True,
+        description="Enable segment-based translation for split episodes",
+    )
+    translation_merge_segments: bool = Field(
+        default=False,
+        description="Whether to merge translated segments into a single file",
+    )
+    translation_segment_parallel: bool = Field(
+        default=False,
+        description="Enable parallel translation of segments",
+    )
+    translation_segment_max_workers: int = Field(
+        default=4,
+        ge=1,
+        le=8,
+        description="Maximum number of parallel workers for segment translation",
+    )
+    translation_segment_batch_size: int = Field(
+        default=5,
+        ge=1,
+        le=20,
+        description="Number of segments to process in each parallel batch",
+    )
+
+    # ===================================
     # Processing Configuration
     # ===================================
     asr_batch_size: int = Field(

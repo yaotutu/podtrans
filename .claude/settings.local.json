@@ -74,7 +74,9 @@
       "Bash(/home/yaotutu/miniconda3/envs/podtrans/bin/podtrans:*)",
       "Bash(/home/yaotutu/miniconda3/envs/podtrans/bin/ruff check:*)",
       "Bash(/home/yaotutu/miniconda3/envs/podtrans/bin/ruff format src/podtrans/asr/voice_sample.py src/podtrans/cli.py)",
-      "Bash(/home/yaotutu/miniconda3/envs/podtrans/bin/ruff format:*)"
+      "Bash(/home/yaotutu/miniconda3/envs/podtrans/bin/ruff format:*)",
+      "Bash(git checkout:*)",
+      "Bash(cut:*)"
     ],
     "deny": [],
     "ask": []

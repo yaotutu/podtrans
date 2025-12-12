@@ -3,7 +3,6 @@
 This module provides the CLI commands using Typer.
 """
 
-import asyncio
 from datetime import datetime
 from pathlib import Path
 
@@ -14,11 +13,8 @@ from rich.panel import Panel
 from rich.table import Table
 
 from podtrans.asr import WhisperXHandler
-from podtrans.asr.result_splitter import ASRResultSplitter
-from podtrans.asr.schemas import ASRSplitMetadata
 from podtrans.config import get_settings
 from podtrans.translation import Translator
-from podtrans.translation.segment_translator import SegmentTranslator
 from podtrans.translation.schemas import TranslationResult
 from podtrans.utils.file import read_json, write_json
 
@@ -124,6 +120,17 @@ def rss(
         raise typer.Exit(1)
 
 
+@app.command()
+def version() -> None:
+    """Show version information."""
+    console.print(
+        Panel.fit(
+            "[bold cyan]PodTrans[/bold cyan]\n"
+            "[dim]Version:[/dim] 0.1.0\n"
+            "[dim]AI-powered podcast translation pipeline[/dim]",
+            border_style="cyan",
+        )
+    )
 
 
 def _create_episode_summary(
@@ -311,9 +318,6 @@ def asr(
                 voice_samples_path = episode_dir / "voice_samples.json"
                 write_json(voice_result.model_dump(), voice_samples_path)
 
-                # Save voice sample info to each speaker directory
-                extractor.save_speaker_info_to_dirs(voice_result, episode_dir)
-
                 avg_q = voice_result.extraction_summary.get("average_quality", 0)
                 console.print(
                     f"[dim]Voice samples: {voice_result.total_samples} samples, "
@@ -325,72 +329,6 @@ def asr(
                     f"[yellow]⚠️  Voice sample extraction failed: {voice_err}[/yellow]"
                 )
 
-            # Split ASR result if enabled and audio is long enough
-            segments = []
-            if settings.enable_asr_splitting and asr_result.audio_duration >= settings.asr_split_threshold:
-                console.print("[cyan]🔄 Splitting ASR result...[/cyan]")
-
-                # Create segments directory
-                segments_dir = episode_dir / "segments"
-                segments_dir.mkdir(exist_ok=True)
-
-                # Initialize splitter
-                splitter = ASRResultSplitter(
-                    target_duration=settings.asr_target_duration,
-                    min_duration=settings.asr_min_duration,
-                    max_duration=settings.asr_max_duration,
-                    episode_id=f"episode_{episode_id}",
-                )
-
-                # Split the result
-                segments, split_metadata = splitter.split_result(asr_result, segments_dir)
-
-                # Save segment metadata at the episode level
-                metadata_path = episode_dir / "segment_metadata.json"
-                write_json(split_metadata.model_dump(), metadata_path)
-
-                # Save individual segments in their own subdirectories
-                for segment in segments:
-                    # Create subdirectory for this segment
-                    segment_dir = segments_dir / f"segment_{segment.segment_index:03d}"
-                    segment_dir.mkdir(exist_ok=True)
-
-                    # Save ASR result with asr_ prefix
-                    asr_file = segment_dir / "asr_result.json"
-                    write_json({
-                        "segment_id": segment.segment_id,
-                        "episode_id": segment.episode_id,
-                        "segment_index": segment.segment_index,
-                        "start_time": segment.start_time,
-                        "end_time": segment.end_time,
-                        "duration": segment.duration,
-                        "segments": [s.model_dump() for s in segment.segments],
-                        "speakers": list(segment.speakers),
-                        "language": segment.language,
-                        "model_name": segment.model_name,
-                        "created_at": segment.created_at.isoformat(),
-                    }, asr_file)
-
-                console.print(
-                    f"[green]✓[/green] Split into {len(segments)} segments "
-                    f"(avg: {sum(s.duration for s in segments)/len(segments)/60:.1f} min)"
-                )
-
-                # Update database with split information
-                split_updates = {
-                    "asr_split_completed": True,
-                    "asr_split_timestamp": datetime.now(),
-                    "asr_segment_count": len(segments),
-                    "asr_split_metadata": split_metadata.model_dump_json(),
-                }
-            else:
-                split_updates = {
-                    "asr_split_completed": False,
-                    "asr_split_timestamp": None,
-                    "asr_segment_count": 1,
-                    "asr_split_metadata": None,
-                }
-
             # Update database
             db.update_episode_status(
                 episode_id,
@@ -399,7 +337,6 @@ def asr(
                     "asr_result_path": str(result_path),
                     "asr_timestamp": datetime.now(),
                     "retry_count": 0,  # Reset retry count on success
-                    **split_updates,
                 },
             )
 
@@ -460,17 +397,6 @@ def translation(
         "-t",
         help="Target language code (e.g., 'zh')",
     ),
-    episode_dir: Path = typer.Option(
-        None,
-        "--episode-dir",
-        "-e",
-        help="Translate specific episode directory (bypasses database)",
-    ),
-    segment_by_segment: bool = typer.Option(
-        False,
-        "--segment-by-segment",
-        help="Translate segments one by one (with pause between segments)",
-    ),
 ) -> None:
     """Batch process translation for all ASR-completed episodes.
 
@@ -500,121 +426,7 @@ def translation(
         )
         raise typer.Exit(1)
 
-    # Handle single episode directory mode
-    if episode_dir:
-        console.print(f"[dim]Translation: {source_lang} → {target_lang}[/dim]\n")
-
-        # Initialize translator
-        console.print("[bold cyan]🔧 Initializing translator...[/bold cyan]")
-        try:
-            translator = Translator(settings)
-            console.print(f"[green]✓[/green] Model: {translator.model}")
-            console.print(f"[green]✓[/green] API base: {settings.translation_api_base}")
-            console.print(
-                f"[green]✓[/green] Max segments/batch: "
-                f"{settings.translation_max_segments_per_batch}\n"
-            )
-        except Exception as e:
-            console.print(f"[bold red]❌ Failed to initialize translator: {e}[/bold red]")
-            raise typer.Exit(1)
-
-        # Initialize segment translator
-        segment_translator = SegmentTranslator(translator)
-
-        # Check if episode has segments
-        segments_dir = episode_dir / "segments"
-        segment_metadata_file = episode_dir / "segment_metadata.json"
-
-        if segments_dir.exists() and segment_metadata_file.exists():
-            console.print(f"[cyan]🔄 Processing episode: {episode_dir.name}[/cyan]")
-
-            # Discover segments
-            segments = segment_translator.discover_segments(episode_dir)
-
-            if not segments:
-                console.print("[yellow]⚠️  No segments found[/yellow]")
-                raise typer.Exit(1)
-
-            console.print(f"[dim]Found {len(segments)} segments[/dim]")
-
-            if segment_by_segment:
-                # Translate one by one
-                console.print("[cyan]🔄 Translating segments one by one...[/cyan]\n")
-
-                for i, segment in enumerate(segments, 1):
-                    # Check if already translated
-                    translation_file = segment["segment_dir"] / "translation_result.json"
-                    if translation_file.exists():
-                        console.print(f"✅ Segment {i}/{len(segments)} [{segment['segment_id']}] - Already translated, skipping...")
-                        continue
-
-                    console.print(f"\n{'='*60}")
-                    console.print(f"[bold]Translating segment {i}/{len(segments)}[/bold]")
-                    console.print(f"ID: {segment['segment_id']}")
-                    console.print(f"Time: {segment['start_time']:.1f}s - {segment['end_time']:.1f}s")
-                    console.print(f"{'='*60}")
-
-                    try:
-                        # Translate segment
-                        result = segment_translator.translate_segment(
-                            segment,
-                            source_lang=source_lang,
-                            target_lang=target_lang
-                        )
-
-                        # Save result
-                        segment_translator.save_translation_result(
-                            segment["segment_dir"],
-                            result
-                        )
-
-                        console.print(f"[green]✅ Translation completed![/green]")
-                        console.print(f"[dim]Saved to: {segment['segment_dir']}[/dim]")
-
-                        # Show created files
-                        for f in segment["segment_dir"].glob("*translation*"):
-                            size = f.stat().st_size
-                            console.print(f"[dim]  - {f.name} ({size} bytes)[/dim]")
-
-                    except Exception as e:
-                        console.print(f"[red]❌ Translation failed: {e}[/red]")
-                        if max_retries > 0:
-                            console.print(f"[dim]You can retry later with --max-retries {max_retries}[/dim]")
-
-                # Show final progress
-                progress = segment_translator.get_translation_progress(segments)
-                console.print(f"\n[bold]Translation Summary:[/bold]")
-                console.print(f"  Total segments: {progress['total_segments']}")
-                console.print(f"  Completed: {progress['completed_segments']}")
-                console.print(f"  Progress: {progress['progress_percentage']:.1f}%")
-
-            else:
-                # Batch translate all segments
-                results = segment_translator.translate_segments(
-                    segments,
-                    source_lang=source_lang,
-                    target_lang=target_lang,
-                    max_retries=max_retries
-                )
-
-                success_count = sum(1 for r in results if r['success'])
-                console.print(f"\n[green]✅[/green] Translation completed: {success_count}/{len(results)} segments")
-        else:
-            console.print("[yellow]⚠️  No segments found in episode directory[/yellow]")
-            # Fall back to full episode translation
-            asr_file = episode_dir / "asr_result.json"
-            if asr_file.exists():
-                console.print("[cyan]🔄 Falling back to full episode translation[/cyan]")
-                _translate_full_episode_direct(
-                    asr_file, translator, source_lang, target_lang, console
-                )
-            else:
-                console.print("[red]❌ No ASR result found[/red]")
-                raise typer.Exit(1)
-
-        return
-
-    # Initialize database for batch mode
+    # Initialize database
     db_path = data_dir / "episodes.db"
     if not db_path.exists():
         console.print(f"[bold red]❌ Database not found: {db_path}[/bold red]")
@@ -642,9 +454,6 @@ def translation(
     failed_count = 0
     processed_ids: set[int] = set()  # Track processed episodes to avoid duplicates
 
-    # Initialize segment translator
-    segment_translator = SegmentTranslator(translator)
-
     # Process episodes with dynamic query
     while True:
         # Query pending episodes each iteration
@@ -665,117 +474,54 @@ def translation(
 
         episode_id = episode["id"]
         episode_title = episode["episode_title"]
+        asr_result_path = Path(episode["asr_result_path"])
         episode_dir = Path(episode["episode_dir"])
 
         total_pending = len(episodes)
         console.print(
             f"[bold]Translating[/bold] (pending: {total_pending}): {episode_title}"
         )
-        console.print(f"[dim]Episode directory: {episode_dir}[/dim]")
+        console.print(f"[dim]ASR result: {asr_result_path}[/dim]")
 
         try:
-            # Check if this episode has segments
-            segments_dir = episode_dir / "segments"
-            segment_metadata_file = episode_dir / "segment_metadata.json"
+            # Check if ASR result file exists
+            if not asr_result_path.exists():
+                raise FileNotFoundError(f"ASR result not found: {asr_result_path}")
 
-            if segments_dir.exists() and segment_metadata_file.exists():
-                # 片段模式
-                console.print("[cyan]🔄 Processing in segment mode[/cyan]")
+            # Load ASR result
+            logger.info(f"开始翻译: {episode_title}")
+            asr_result = translator.load_asr_result(asr_result_path)
+            seg_count = asr_result.total_segments
+            spk_count = asr_result.speaker_count
+            console.print(f"[dim]Segments: {seg_count}, Speakers: {spk_count}[/dim]")
 
-                # Discover segments
-                segments = segment_translator.discover_segments(episode_dir)
+            # Translate
+            translation_result = translator.translate_asr_result(
+                asr_result, source_lang, target_lang
+            )
 
-                if not segments:
-                    console.print("[yellow]⚠️  No segments found, falling back to episode mode[/yellow]")
-                    # Fall back to episode mode
-                    _translate_full_episode(
-                        episode, translator, source_lang, target_lang, console, db
-                    )
-                    success_count += 1
-                    continue
+            # Save result
+            result_path = episode_dir / "translation_result"
+            translator.save_result(
+                translation_result,
+                result_path,
+                save_bilingual=True,
+            )
 
-                # Create segment records in database if needed
-                db.create_translation_segments(episode_id, segments)
+            # Update database
+            db.update_episode_status(
+                episode_id,
+                {
+                    "translation_completed": True,
+                    "translation_result_path": str(result_path.with_suffix(".json")),
+                    "translation_timestamp": datetime.now(),
+                    "retry_count": 0,  # Reset retry count on success
+                },
+            )
 
-                console.print(f"[dim]Found {len(segments)} segments[/dim]")
-
-                # Get progress
-                progress = segment_translator.get_translation_progress(segments)
-                console.print(
-                    f"[dim]Progress: {progress['completed_segments']}/{progress['total_segments']} "
-                    f"({progress['progress_percentage']:.1f}%)[/dim]"
-                )
-
-                # Process segments
-                results = segment_translator.translate_segments(
-                    segments,
-                    source_lang=source_lang,
-                    target_lang=target_lang,
-                    max_retries=max_retries
-                )
-
-                # Update database with results
-                for result in results:
-                    segment = next(s for s in segments if s["segment_id"] == result["segment_id"])
-
-                    if result["success"]:
-                        # Convert Path to string for database
-                        result_path = str(result["translation_result_path"]) if result.get("translation_result_path") else None
-                        db.update_translation_segment_status(
-                            segment["segment_id"],
-                            episode_id,
-                            {
-                                "translation_completed": True,
-                                "translation_result_path": result_path,
-                                "error_count": 0,
-                                "retry_count": 0
-                            }
-                        )
-                    else:
-                        db.update_translation_segment_status(
-                            segment["segment_id"],
-                            episode_id,
-                            {
-                                "translation_completed": False,
-                                "error_count": 1,
-                                "last_error": result["error"],
-                                "retry_count": result.get("retry_count", 0)
-                            }
-                        )
-
-                # Check if all segments completed
-                final_progress = segment_translator.get_translation_progress(segments)
-                if final_progress["completed_segments"] == final_progress["total_segments"]:
-                    # Update episode as completed
-                    db.update_episode_status(
-                        episode_id,
-                        {
-                            "translation_completed": True,
-                            "translation_timestamp": datetime.now(),
-                            "retry_count": 0
-                        }
-                    )
-
-                    # Optionally merge results
-                    if settings.translation_merge_segments:
-                        merged_file = segment_translator.merge_translation_results(
-                            episode_dir, segments, "json"
-                        )
-                        console.print(f"[green]✓[/green] Merged results: {merged_file}")
-
-                success_count += 1
-                console.print(
-                    f"[green]✅ Segments completed: "
-                    f"{final_progress['completed_segments']}/{final_progress['total_segments']}\n"
-                )
-
-            else:
-                # 完整剧集模式
-                console.print("[cyan]🔄 Processing in episode mode[/cyan]")
-                _translate_full_episode(
-                    episode, translator, source_lang, target_lang, console, db
-                )
-                success_count += 1
+            success_count += 1
+            console.print(f"[green]✅ Success[/green]: {result_path}.json\n")
+            logger.info(f"翻译成功: {episode_title}")
 
         except KeyboardInterrupt:
             console.print("\n[yellow]⚠️  Interrupted by user[/yellow]")
@@ -828,51 +574,339 @@ def translation(
         console.print("=" * 50 + "\n")
 
 
-def _translate_full_episode(episode, translator, source_lang, target_lang, console, db):
-    """翻译完整剧集（非片段模式）"""
-    episode_id = episode["id"]
-    episode_title = episode["episode_title"]
-    asr_result_path = Path(episode["asr_result_path"])
-    episode_dir = Path(episode["episode_dir"])
+@app.command()
+def tts(
+    data_dir: Path = typer.Option(
+        Path("./data"),
+        "--data-dir",
+        "-d",
+        help="Data directory path",
+    ),
+    max_retries: int = typer.Option(
+        3,
+        "--max-retries",
+        help="Maximum retry count for failed episodes",
+    ),
+) -> None:
+    """Batch process TTS for all translated episodes.
 
-    # Check if ASR result file exists
-    if not asr_result_path.exists():
-        raise FileNotFoundError(f"ASR result not found: {asr_result_path}")
+    This command:
+    - Queries database for episodes with translation_completed=True and
+      tts_completed=False
+    - Assembles SoulX input JSON from translation_result.json and voice_samples.json
+    - Saves soulx_input.json for debugging
+    - Calls SoulX to generate audio
+    - Updates database with completion status
 
-    # Load ASR result
-    logger.info(f"开始翻译: {episode_title}")
-    asr_result = translator.load_asr_result(asr_result_path)
-    seg_count = asr_result.total_segments
-    spk_count = asr_result.speaker_count
-    console.print(f"[dim]Segments: {seg_count}, Speakers: {spk_count}[/dim]")
+    Example:
+        podtrans tts
+        podtrans tts --data-dir ./data --max-retries 5
+    """
+    from podtrans.services.database import DatabaseManager
+    from podtrans.tts.soulx.converter import SoulXConverter
 
-    # Translate
-    translation_result = translator.translate_asr_result(
-        asr_result, source_lang, target_lang
+    console.print("\n[bold blue]🎙️  PodTrans - Batch TTS Processing[/bold blue]\n")
+
+    # Initialize database
+    db_path = data_dir / "episodes.db"
+    if not db_path.exists():
+        console.print(f"[bold red]❌ Database not found: {db_path}[/bold red]")
+        raise typer.Exit(1)
+
+    db = DatabaseManager(db_path, init_db=False)
+
+    # Initialize converter
+    converter = SoulXConverter()
+
+    console.print("[bold cyan]📋 TTS command will only generate soulx_input.json[/bold cyan]")
+    console.print("[yellow]No external TTS service will be called[/yellow]\n")
+
+    success_count = 0
+    failed_count = 0
+    processed_ids: set[int] = set()
+
+    # Process episodes with dynamic query
+    while True:
+        # Query pending episodes each iteration
+        episodes = db.get_pending_episodes(stage="tts")
+        episodes = [
+            ep
+            for ep in episodes
+            if ep.get("retry_count", 0) < max_retries and ep["id"] not in processed_ids
+        ]
+
+        if not episodes:
+            if success_count == 0 and failed_count == 0:
+                console.print("[green]✅ No episodes pending for TTS[/green]")
+            break
+
+        episode = episodes[0]
+        processed_ids.add(episode["id"])
+
+        episode_id = episode["id"]
+        episode_title = episode["episode_title"]
+        episode_dir = Path(episode["episode_dir"])
+
+        total_pending = len(episodes)
+        console.print(
+            f"[bold]Processing TTS[/bold] (pending: {total_pending}): {episode_title}"
+        )
+
+        try:
+            # Check required files
+            translation_path = episode_dir / "translation_result.json"
+            voice_samples_path = episode_dir / "voice_samples.json"
+
+            if not translation_path.exists():
+                raise FileNotFoundError(f"Translation not found: {translation_path}")
+
+            if not voice_samples_path.exists():
+                console.print(
+                    "[yellow]⚠️  voice_samples.json not found, "
+                    "TTS will use default voices[/yellow]"
+                )
+                voice_samples_path = None
+
+            # 使用简化的转换器直接从文件转换
+            logger.info(f"开始TTS处理: {episode_title}")
+            console.print("[dim]Converting to SoulX format...[/dim]")
+
+            # converter 会自动处理所有逻辑
+            soulx_input = converter.convert_from_file(translation_path)
+
+            # 获取统计信息
+            seg_count = len(soulx_input.get("text", []))
+            spk_count = len(soulx_input.get("speakers", {}))
+            console.print(f"[dim]Segments: {seg_count}, Speakers: {spk_count}[/dim]")
+
+            # Save soulx_input.json for debugging
+            soulx_input_path = episode_dir / "soulx_input.json"
+            write_json(soulx_input, soulx_input_path)
+            console.print(f"[green]✓[/green] Saved: {soulx_input_path}")
+
+            # TTS command now only generates soulx_input.json
+            # No external TTS service is called
+            console.print("[yellow]Note: TTS command only generates soulx_input.json[/yellow]")
+            console.print("[yellow]To synthesize audio, run: soulx-podcast --json_path soulx_input.json[/yellow]")
+
+            # Update database
+            db.update_episode_status(
+                episode_id,
+                {
+                    "tts_completed": True,
+                    "tts_soulx_input_path": str(soulx_input_path),
+                    "tts_timestamp": datetime.now(),
+                    "retry_count": 0,
+                },
+            )
+
+            success_count += 1
+            console.print(f"[green]✅ Success[/green]: {soulx_input_path}\n")
+            logger.info(f"TTS处理成功: {episode_title}")
+
+        except KeyboardInterrupt:
+            console.print("\n[yellow]⚠️  Interrupted by user[/yellow]")
+            raise typer.Exit(1)
+
+        except Exception as e:
+            failed_count += 1
+            error_msg = str(e)
+
+            # Update database with error
+            current_retry = episode.get("retry_count", 0)
+            db.update_episode_status(
+                episode_id,
+                {
+                    "retry_count": current_retry + 1,
+                    "error_count": episode.get("error_count", 0) + 1,
+                    "last_error": error_msg,
+                },
+            )
+
+            console.print(f"[red]❌ Failed[/red]: {error_msg}\n")
+            logger.error(f"TTS处理失败: {episode_title}: {error_msg}")
+
+    # Print summary
+    if success_count > 0 or failed_count > 0:
+        console.print("\n" + "=" * 50)
+        console.print("[bold]TTS Summary[/bold]")
+        console.print(f"  Total: {success_count + failed_count}")
+        console.print(f"  [green]Success: {success_count}[/green]")
+        console.print(f"  [red]Failed: {failed_count}[/red]")
+        console.print("=" * 50 + "\n")
+
+
+def _format_file_size(size_bytes: int) -> str:
+    """格式化文件大小"""
+    if size_bytes < 1024:
+        return f"{size_bytes} B"
+    elif size_bytes < 1024 * 1024:
+        return f"{size_bytes / 1024:.1f} KB"
+    elif size_bytes < 1024 * 1024 * 1024:
+        return f"{size_bytes / (1024 * 1024):.1f} MB"
+    else:
+        return f"{size_bytes / (1024 * 1024 * 1024):.2f} GB"
+
+
+def _format_duration(seconds: float) -> str:
+    """格式化时长"""
+    if seconds < 60:
+        return f"{seconds:.0f}s"
+    elif seconds < 3600:
+        mins = int(seconds // 60)
+        secs = int(seconds % 60)
+        return f"{mins}m {secs}s"
+    else:
+        hours = int(seconds // 3600)
+        mins = int((seconds % 3600) // 60)
+        return f"{hours}h {mins}m"
+
+
+def _render_status_display(data_dir: Path, show_episodes: bool = False) -> None:
+    """渲染状态显示（用于刷新）"""
+    import sqlite3
+
+    db_path = data_dir / "episodes.db"
+    if not db_path.exists():
+        console.print(f"[bold red]❌ Database not found: {db_path}[/bold red]")
+        console.print("[dim]Run 'podtrans rss' first to download episodes[/dim]\n")
+        return
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+
+    # 获取所有剧集
+    all_episodes = conn.execute("""
+        SELECT * FROM episodes
+        ORDER BY created_at DESC
+    """).fetchall()
+
+    # 统计数据
+    total = len(all_episodes)
+    download_done = sum(1 for ep in all_episodes if ep["download_completed"])
+    asr_done = sum(1 for ep in all_episodes if ep["asr_completed"])
+    trans_done = sum(1 for ep in all_episodes if ep["translation_completed"])
+    tts_done = sum(1 for ep in all_episodes if ep["tts_completed"])
+
+    # 计算总文件大小
+    total_size = sum(ep["file_size"] or 0 for ep in all_episodes)
+
+    # 统计错误
+    error_count = sum(1 for ep in all_episodes if ep["last_error"])
+
+    conn.close()
+
+    # 清屏效果
+    console.clear()
+
+    # 标题
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    console.print(f"\n[bold blue]📊 PodTrans Status[/bold blue]  [dim]{now}[/dim]\n")
+
+    # 总览表格
+    overview_table = Table(show_header=False, box=None, padding=(0, 2))
+    overview_table.add_column("Label", style="dim")
+    overview_table.add_column("Value", style="bold")
+
+    overview_table.add_row("Total Episodes", str(total))
+    overview_table.add_row("Total Size", _format_file_size(total_size))
+    overview_table.add_row(
+        "Errors", f"[red]{error_count}[/red]" if error_count else "[green]0[/green]"
     )
 
-    # Save result
-    result_path = episode_dir / "translation_result"
-    translator.save_result(
-        translation_result,
-        result_path,
-        save_bilingual=True,
-    )
+    console.print(overview_table)
+    console.print()
 
-    # Update database
-    db.update_episode_status(
-        episode_id,
-        {
-            "translation_completed": True,
-            "translation_result_path": str(result_path.with_suffix(".json")),
-            "translation_timestamp": datetime.now(),
-            "retry_count": 0,  # Reset retry count on success
-        },
-    )
+    # 进度条显示
+    if total > 0:
+        console.print("[bold]Pipeline Progress[/bold]\n")
 
-    console.print(f"[green]✅ Success[/green]: {result_path}.json\n")
-    logger.info(f"翻译成功: {episode_title}")
+        # 手动绘制进度条
+        stages = [
+            ("Download", download_done, "green"),
+            ("ASR", asr_done, "cyan"),
+            ("Translation", trans_done, "yellow"),
+            ("TTS", tts_done, "magenta"),
+        ]
 
+        for stage_name, completed, color in stages:
+            pct = (completed / total) * 100 if total > 0 else 0
+            bar_width = 30
+            filled = int(bar_width * completed / total) if total > 0 else 0
+            bar = "█" * filled + "░" * (bar_width - filled)
+            stats = f"{completed}/{total} ({pct:.0f}%)"
+            console.print(f"  {stage_name:12} [{color}]{bar}[/{color}] {stats}")
+
+        console.print()
+
+    # 剧集列表
+    if show_episodes and all_episodes:
+        console.print("[bold]Episodes[/bold]\n")
+
+        ep_table = Table(show_header=True, header_style="bold", box=None)
+        ep_table.add_column("#", style="dim", width=3)
+        ep_table.add_column("Title", style="white", max_width=40, overflow="ellipsis")
+        ep_table.add_column("Size", style="cyan", justify="right", width=10)
+        ep_table.add_column("Status", width=20)
+        ep_table.add_column("Updated", style="dim", width=16)
+
+        for idx, ep in enumerate(all_episodes[:10], 1):  # 只显示最近10个
+            # 状态图标
+            d = "✅" if ep["download_completed"] else "⏳"
+            a = (
+                "✅"
+                if ep["asr_completed"]
+                else ("⏳" if ep["download_completed"] else "⬜")
+            )
+            t = (
+                "✅"
+                if ep["translation_completed"]
+                else ("⏳" if ep["asr_completed"] else "⬜")
+            )
+            s = (
+                "✅"
+                if ep["tts_completed"]
+                else ("⏳" if ep["translation_completed"] else "⬜")
+            )
+
+            status_str = f"{d}→{a}→{t}→{s}"
+
+            # 如果有错误，添加红色标记
+            if ep["last_error"]:
+                status_str += " [red]⚠[/red]"
+
+            # 文件大小
+            size_str = _format_file_size(ep["file_size"]) if ep["file_size"] else "-"
+
+            # 更新时间
+            updated = ep["updated_at"][:16] if ep["updated_at"] else "-"
+
+            # 标题截断
+            title = ep["episode_title"]
+            if len(title) > 40:
+                title = title[:37] + "..."
+
+            ep_table.add_row(str(idx), title, size_str, status_str, updated)
+
+        console.print(ep_table)
+
+        if len(all_episodes) > 10:
+            console.print(
+                f"\n[dim]... and {len(all_episodes) - 10} more episodes[/dim]"
+            )
+
+    console.print()
+
+    # 错误详情
+    errors = [ep for ep in all_episodes if ep["last_error"]]
+    if errors:
+        console.print(f"[bold red]Errors ({len(errors)})[/bold red]\n")
+        for ep in errors[:3]:  # 只显示最近3个错误
+            console.print(f"  [red]•[/red] {ep['episode_title'][:50]}")
+            console.print(f"    [dim]{ep['last_error'][:80]}[/dim]")
+        if len(errors) > 3:
+            console.print(f"\n[dim]  ... and {len(errors) - 3} more errors[/dim]")
+        console.print()
 
 
 @app.command()
@@ -927,48 +961,6 @@ def status(
             console.print("\n[dim]Stopped watching[/dim]")
     else:
         _render_status_display(data_dir, show_episodes=episodes)
-
-
-def _translate_full_episode_direct(asr_file, translator, source_lang, target_lang, console):
-    """直接翻译完整剧集（不需要数据库）"""
-    episode_dir = asr_file.parent
-
-    # Check if already translated
-    translation_file = episode_dir / "translation_result.json"
-    if translation_file.exists():
-        console.print("[yellow]⚠️  Episode already translated, skipping...[/yellow]")
-        return
-
-    # Load ASR result
-    console.print(f"[dim]Loading ASR result: {asr_file.name}[/dim]")
-    asr_result = translator.load_asr_result(asr_file)
-    seg_count = asr_result.total_segments
-    spk_count = asr_result.speaker_count
-    console.print(f"[dim]Segments: {seg_count}, Speakers: {spk_count}[/dim]")
-
-    # Translate
-    translation_result = translator.translate_asr_result(
-        asr_result=asr_result,
-        source_lang=source_lang,
-        target_lang=target_lang
-    )
-
-    # Save results
-    output_file = episode_dir / "translation_result.json"
-    write_json(translation_result.model_dump(), output_file)
-    console.print(f"[green]✓[/green] Translation saved: {output_file}")
-
-    # Save Chinese text
-    zh_file = episode_dir / "translation_result.zh.txt"
-    with open(zh_file, 'w', encoding='utf-8') as f:
-        f.write(translation_result.to_chinese_text(include_speakers=False))
-    console.print(f"[green]✓[/green] Chinese text saved: {zh_file}")
-
-    # Save bilingual text
-    bilingual_file = episode_dir / "translation_result.bilingual.txt"
-    with open(bilingual_file, 'w', encoding='utf-8') as f:
-        f.write(translation_result.to_bilingual_text(include_speakers=True))
-    console.print(f"[green]✓[/green] Bilingual text saved: {bilingual_file}")
 
 
 @app.callback()

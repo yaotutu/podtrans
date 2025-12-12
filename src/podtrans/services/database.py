@@ -17,7 +17,7 @@ from loguru import logger
 class DatabaseManager:
     """播客剧集数据库管理器"""
 
-    def __init__(self, db_path: Path, init_db: bool = True):
+    def __init__(self, db_path: Path, init_db: bool = True, migrate: bool = True):
         """
         初始化数据库管理器
 
@@ -25,12 +25,18 @@ class DatabaseManager:
             db_path: 数据库文件路径
             init_db: 是否初始化数据库表结构（默认True）
                      - True: RSS模块首次创建数据库时使用
-                     - False: 其他模块只读写时使用，跳过初始化
+                     - False: 其他模块只读写时使用
+            migrate: 是否运行数据库迁移（默认True）
         """
         self.db_path = Path(db_path)
         if init_db:
             self.db_path.parent.mkdir(parents=True, exist_ok=True)
             self._init_database()
+        elif migrate and self.db_path.exists():
+            # 运行迁移以添加新字段
+            self._migrate_database()
+            # 运行翻译片段相关迁移
+            self._migrate_translation_segments()
 
     def _init_database(self):
         """初始化数据库表结构"""
@@ -58,9 +64,27 @@ class DatabaseManager:
                     translation_completed BOOLEAN DEFAULT FALSE,
                     translation_timestamp TIMESTAMP,
                     translation_result_path TEXT,
+                    -- Convert stage (format conversion)
+                    convert_completed BOOLEAN DEFAULT FALSE,
+                    convert_timestamp TIMESTAMP,
+                    convert_result_path TEXT,
+                    convert_format TEXT,
+
+                    -- Synthesize stage (audio generation)
+                    synthesize_completed BOOLEAN DEFAULT FALSE,
+                    synthesize_timestamp TIMESTAMP,
+                    synthesize_result_path TEXT,
+
+                    -- Legacy TTS stage (deprecated)
                     tts_completed BOOLEAN DEFAULT FALSE,
                     tts_timestamp TIMESTAMP,
                     tts_result_path TEXT,
+
+                    -- ASR 结果切分相关
+                    asr_split_completed BOOLEAN DEFAULT FALSE,
+                    asr_split_timestamp TIMESTAMP,
+                    asr_segment_count INTEGER DEFAULT 1,
+                    asr_split_metadata TEXT,
 
                     -- 错误处理
                     error_count INTEGER DEFAULT 0,
@@ -81,6 +105,104 @@ class DatabaseManager:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_asr_completed ON episodes(asr_completed)")
 
             logger.info(f"数据库初始化完成: {self.db_path}")
+
+    def _migrate_database(self):
+        """迁移数据库以添加新字段"""
+        with sqlite3.connect(self.db_path) as conn:
+            # 检查 asr_split_completed 字段是否存在
+            cursor = conn.execute("""
+                PRAGMA table_info(episodes)
+            """)
+            columns = {row[1] for row in cursor.fetchall()}
+
+            # 添加缺失的字段
+            if 'asr_split_completed' not in columns:
+                logger.info("迁移数据库：添加 ASR 切分相关字段")
+                conn.execute("""
+                    ALTER TABLE episodes
+                    ADD COLUMN asr_split_completed BOOLEAN DEFAULT FALSE
+                """)
+                conn.execute("""
+                    ALTER TABLE episodes
+                    ADD COLUMN asr_split_timestamp TIMESTAMP
+                """)
+                conn.execute("""
+                    ALTER TABLE episodes
+                    ADD COLUMN asr_segment_count INTEGER DEFAULT 1
+                """)
+                conn.execute("""
+                    ALTER TABLE episodes
+                    ADD COLUMN asr_split_metadata TEXT
+                """)
+                logger.info("数据库迁移完成")
+
+    def _migrate_translation_segments(self):
+        """迁移数据库以添加翻译片段支持"""
+        with sqlite3.connect(self.db_path) as conn:
+            # 检查表是否已存在
+            cursor = conn.execute("""
+                SELECT name FROM sqlite_master
+                WHERE type='table' AND name='translation_segments'
+            """)
+
+            if cursor.fetchone() is None:
+                logger.info("迁移数据库：添加 translation_segments 表")
+
+                # 创建 translation_segments 表
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS translation_segments (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        episode_id INTEGER NOT NULL,
+                        segment_id TEXT NOT NULL,
+                        segment_index INTEGER NOT NULL,
+                        asr_result_path TEXT NOT NULL,
+                        translation_completed BOOLEAN DEFAULT FALSE,
+                        translation_timestamp TIMESTAMP,
+                        translation_result_path TEXT,
+                        error_count INTEGER DEFAULT 0,
+                        last_error TEXT,
+                        retry_count INTEGER DEFAULT 0,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY (episode_id) REFERENCES episodes(id),
+                        UNIQUE(episode_id, segment_id)
+                    )
+                """)
+
+                # 创建索引
+                conn.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_translation_segments_episode
+                    ON translation_segments(episode_id)
+                """)
+                conn.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_translation_segments_status
+                    ON translation_segments(translation_completed)
+                """)
+
+                logger.info("translation_segments 表创建完成")
+
+            # 检查并添加 episodes 表的新字段
+            cursor = conn.execute("""
+                PRAGMA table_info(episodes)
+            """)
+            columns = {row[1] for row in cursor.fetchall()}
+
+            # 添加缺失的字段
+            if 'translation_segment_count' not in columns:
+                logger.info("添加翻译片段相关字段到 episodes 表")
+                conn.execute("""
+                    ALTER TABLE episodes
+                    ADD COLUMN translation_segment_count INTEGER DEFAULT 0
+                """)
+                conn.execute("""
+                    ALTER TABLE episodes
+                    ADD COLUMN translation_segments_completed INTEGER DEFAULT 0
+                """)
+                conn.execute("""
+                    ALTER TABLE episodes
+                    ADD COLUMN translation_segments_mode BOOLEAN DEFAULT FALSE
+                """)
+                logger.info("episodes 表字段添加完成")
 
     def create_episode(self,
                       podcast_name: str,
@@ -300,7 +422,10 @@ class DatabaseManager:
                 stats['total_episodes'] = result.fetchone()[0]
 
                 # 各阶段完成数量
-                stages = ['download_completed', 'asr_completed', 'translation_completed', 'tts_completed']
+                stages = [
+                    'download_completed', 'asr_completed', 'translation_completed',
+                    'tts_completed'
+                ]
                 for stage in stages:
                     result = conn.execute(f"SELECT COUNT(*) FROM episodes WHERE {stage} = 1")
                     stats[stage] = result.fetchone()[0]
@@ -394,3 +519,212 @@ class DatabaseManager:
         except sqlite3.Error as e:
             logger.error(f"获取剧集信息失败: {e}")
             return None
+
+    # ==================== Translation Segments Methods ====================
+
+    def create_translation_segments(self, episode_id: int, segments: List[Dict[str, Any]]) -> bool:
+        """
+        批量创建翻译片段记录
+
+        Args:
+            episode_id: 剧集ID
+            segments: 片段信息列表，每个包含 segment_id, segment_index, asr_result_path
+
+        Returns:
+            是否创建成功
+        """
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                # 更新剧集的片段模式标记和计数
+                conn.execute("""
+                    UPDATE episodes
+                    SET
+                        translation_segments_mode = TRUE,
+                        translation_segment_count = ?,
+                        translation_segments_completed = 0
+                    WHERE id = ?
+                """, (len(segments), episode_id))
+
+                # 插入片段记录
+                for segment in segments:
+                    conn.execute("""
+                        INSERT OR REPLACE INTO translation_segments
+                        (episode_id, segment_id, segment_index, asr_result_path, created_at)
+                        VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    """, (
+                        episode_id,
+                        segment["segment_id"],
+                        segment["segment_index"],
+                        str(segment["asr_result_path"])
+                    ))
+
+                logger.info(f"创建了 {len(segments)} 个翻译片段记录")
+                return True
+
+        except sqlite3.Error as e:
+            logger.error(f"创建翻译片段记录失败: {e}")
+            return False
+
+    def get_pending_translation_segments(self, episode_id: int = None) -> List[Dict[str, Any]]:
+        """
+        获取待翻译的片段列表
+
+        Args:
+            episode_id: 剧集ID，如果为None则获取所有待翻译的片段
+
+        Returns:
+            待翻译的片段信息列表
+        """
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                conn.row_factory = sqlite3.Row
+
+                if episode_id:
+                    result = conn.execute("""
+                        SELECT ts.*, e.episode_title, e.episode_dir
+                        FROM translation_segments ts
+                        JOIN episodes e ON ts.episode_id = e.id
+                        WHERE ts.episode_id = ? AND ts.translation_completed = FALSE
+                        ORDER BY ts.episode_id, ts.segment_index
+                    """, (episode_id,))
+                else:
+                    result = conn.execute("""
+                        SELECT ts.*, e.episode_title, e.episode_dir
+                        FROM translation_segments ts
+                        JOIN episodes e ON ts.episode_id = e.id
+                        WHERE ts.translation_completed = FALSE
+                        ORDER BY ts.episode_id, ts.segment_index
+                    """)
+
+                return [dict(row) for row in result.fetchall()]
+
+        except sqlite3.Error as e:
+            logger.error(f"获取待翻译片段失败: {e}")
+            return []
+
+    def update_translation_segment_status(
+        self,
+        segment_id: str,
+        episode_id: int,
+        status_data: Dict[str, Any]
+    ) -> bool:
+        """
+        更新片段翻译状态
+
+        Args:
+            segment_id: 片段ID
+            episode_id: 剧集ID
+            status_data: 状态更新数据
+
+        Returns:
+            是否更新成功
+        """
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                # 更新片段状态
+                fields = []
+                values = []
+
+                if "translation_completed" in status_data:
+                    fields.append("translation_completed = ?")
+                    values.append(status_data["translation_completed"])
+
+                if "translation_result_path" in status_data:
+                    fields.append("translation_result_path = ?")
+                    # Convert Path to string if necessary
+                    path_value = status_data["translation_result_path"]
+                    if isinstance(path_value, Path):
+                        path_value = str(path_value)
+                    values.append(path_value)
+
+                if "error_count" in status_data:
+                    fields.append("error_count = ?")
+                    values.append(status_data["error_count"])
+
+                if "last_error" in status_data:
+                    fields.append("last_error = ?")
+                    values.append(status_data["last_error"])
+
+                if "retry_count" in status_data:
+                    fields.append("retry_count = ?")
+                    values.append(status_data["retry_count"])
+
+                # 添加时间戳和标识符
+                fields.append("updated_at = CURRENT_TIMESTAMP")
+                values.extend([segment_id, episode_id])
+
+                query = f"""
+                    UPDATE translation_segments
+                    SET {', '.join(fields)}
+                    WHERE segment_id = ? AND episode_id = ?
+                """
+                conn.execute(query, values)
+
+                # 更新剧集级别的翻译进度
+                conn.execute("""
+                    UPDATE episodes
+                    SET translation_segments_completed = (
+                        SELECT COUNT(*)
+                        FROM translation_segments
+                        WHERE episode_id = ? AND translation_completed = TRUE
+                    )
+                    WHERE id = ?
+                """, (episode_id, episode_id))
+
+                return True
+
+        except sqlite3.Error as e:
+            logger.error(f"更新片段翻译状态失败: {e}")
+            return False
+
+    def get_translation_progress(self, episode_id: int) -> Dict[str, Any]:
+        """
+        获取剧集的翻译进度
+
+        Args:
+            episode_id: 剧集ID
+
+        Returns:
+            翻译进度信息
+        """
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                conn.row_factory = sqlite3.Row
+
+                # 获取剧集基本信息
+                episode = conn.execute("""
+                    SELECT translation_segment_count, translation_segments_completed
+                    FROM episodes
+                    WHERE id = ?
+                """, (episode_id,)).fetchone()
+
+                if not episode:
+                    return {"error": "Episode not found"}
+
+                # 获取片段统计
+                stats = conn.execute("""
+                    SELECT
+                        COUNT(*) as total,
+                        SUM(CASE WHEN translation_completed = TRUE THEN 1 ELSE 0 END) as completed,
+                        SUM(CASE WHEN translation_completed = FALSE THEN 1 ELSE 0 END) as pending,
+                        SUM(error_count) as total_errors
+                    FROM translation_segments
+                    WHERE episode_id = ?
+                """, (episode_id,)).fetchone()
+
+                return {
+                    "episode_id": episode_id,
+                    "segment_count": episode["translation_segment_count"],
+                    "segments_completed": episode["translation_segments_completed"],
+                    "total_segments": stats["total"] or 0,
+                    "completed_segments": stats["completed"] or 0,
+                    "pending_segments": stats["pending"] or 0,
+                    "total_errors": stats["total_errors"] or 0,
+                    "progress_percentage": (
+                        (stats["completed"] / stats["total"] * 100) if stats["total"] > 0 else 0
+                    )
+                }
+
+        except sqlite3.Error as e:
+            logger.error(f"获取翻译进度失败: {e}")
+            return {"error": str(e)}
