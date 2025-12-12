@@ -132,7 +132,7 @@ class RSSProcessor:
         try:
             # 1. 获取RSS信息并解析
             timeout_value = self.global_settings.download_timeout
-            async with httpx.AsyncClient(timeout=timeout_value) as client:
+            async with httpx.AsyncClient(timeout=timeout_value, follow_redirects=True) as client:
                 response = await client.get(rss_url)
                 response.raise_for_status()
 

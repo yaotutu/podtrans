@@ -32,10 +32,11 @@ download_count = 2                            # 仅在 download_mode = "latest" 
 
 # 示例2：下载全部剧集（已禁用）
 [[rss_feeds]]
-name = "Example Podcast"
-url = "https://example.com/feed.xml"
-enabled = false
-download_mode = "all"
+name = "atp"
+url = "https://atp.fm/episodes?format=rss"
+enabled = true
+download_mode = "latest"
+download_count = 3
 # download_count 在 mode="all" 时无效，可以省略
 
 # 你可以继续添加更多RSS源
