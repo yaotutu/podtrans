@@ -223,6 +223,27 @@ class Settings(BaseSettings):
     )
 
     # ===================================
+    # Parallel Batch Translation Configuration
+    # 并行批次翻译配置：用于加速多批次翻译处理
+    # ===================================
+    translation_parallel_enabled: bool = Field(
+        default=True,
+        description="Enable parallel batch translation (process multiple batches concurrently)",
+    )
+    translation_parallel_max_workers: int = Field(
+        default=4,
+        ge=1,
+        le=16,
+        description="Maximum number of parallel workers for batch translation",
+    )
+    translation_rate_limit_per_second: float = Field(
+        default=2.0,
+        ge=0.1,
+        le=10.0,
+        description="Maximum API requests per second (rate limiting to avoid API throttling)",
+    )
+
+    # ===================================
     # Processing Configuration
     # ===================================
     asr_batch_size: int = Field(

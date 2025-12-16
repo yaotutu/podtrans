@@ -30,7 +30,7 @@ enabled = true
 download_mode = "latest"                      # 可选值: "latest" 或 "all"
 download_count = 2                            # 仅在 download_mode = "latest" 时有效
 
-# 示例2：下载全部剧集（已禁用）
+
 [[rss_feeds]]
 name = "atp"
 url = "https://atp.fm/episodes?format=rss"
@@ -38,6 +38,14 @@ enabled = true
 download_mode = "latest"
 download_count = 3
 # download_count 在 mode="all" 时无效，可以省略
+
+
+[[rss_feeds]]
+name = "megaphone"
+url = "https://feeds.megaphone.fm/TPG1669083856"
+enabled = true
+download_mode = "latest"
+download_count = 2
 
 # 你可以继续添加更多RSS源
 # [[rss_feeds]]

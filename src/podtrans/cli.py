@@ -10,17 +10,13 @@ from pathlib import Path
 import typer
 from loguru import logger
 from rich.console import Console
-from rich.panel import Panel
-from rich.table import Table
 
 from podtrans.asr import WhisperXHandler
 from podtrans.asr.result_splitter import ASRResultSplitter
-from podtrans.asr.schemas import ASRSplitMetadata
 from podtrans.config import get_settings
 from podtrans.translation import Translator
 from podtrans.translation.segment_translator import SegmentTranslator
-from podtrans.translation.schemas import TranslationResult
-from podtrans.utils.file import read_json, write_json
+from podtrans.utils.file import write_json
 
 app = typer.Typer(
     name="podtrans",
@@ -28,7 +24,6 @@ app = typer.Typer(
     add_completion=False,
 )
 console = Console()
-
 
 
 @app.command()
@@ -122,8 +117,6 @@ def rss(
         console.print(f"\n[bold red]❌ RSS download error: {e}[/bold red]")
         logger.exception("RSS download error")
         raise typer.Exit(1)
-
-
 
 
 def _create_episode_summary(
@@ -327,7 +320,10 @@ def asr(
 
             # Split ASR result if enabled and audio is long enough
             segments = []
-            if settings.enable_asr_splitting and asr_result.audio_duration >= settings.asr_split_threshold:
+            if (
+                settings.enable_asr_splitting
+                and asr_result.audio_duration >= settings.asr_split_threshold
+            ):
                 console.print("[cyan]🔄 Splitting ASR result...[/cyan]")
 
                 # Create segments directory
@@ -343,7 +339,9 @@ def asr(
                 )
 
                 # Split the result
-                segments, split_metadata = splitter.split_result(asr_result, segments_dir)
+                segments, split_metadata = splitter.split_result(
+                    asr_result, segments_dir
+                )
 
                 # Save segment metadata at the episode level
                 metadata_path = episode_dir / "segment_metadata.json"
@@ -357,23 +355,26 @@ def asr(
 
                     # Save ASR result with asr_ prefix
                     asr_file = segment_dir / "asr_result.json"
-                    write_json({
-                        "segment_id": segment.segment_id,
-                        "episode_id": segment.episode_id,
-                        "segment_index": segment.segment_index,
-                        "start_time": segment.start_time,
-                        "end_time": segment.end_time,
-                        "duration": segment.duration,
-                        "segments": [s.model_dump() for s in segment.segments],
-                        "speakers": list(segment.speakers),
-                        "language": segment.language,
-                        "model_name": segment.model_name,
-                        "created_at": segment.created_at.isoformat(),
-                    }, asr_file)
+                    write_json(
+                        {
+                            "segment_id": segment.segment_id,
+                            "episode_id": segment.episode_id,
+                            "segment_index": segment.segment_index,
+                            "start_time": segment.start_time,
+                            "end_time": segment.end_time,
+                            "duration": segment.duration,
+                            "segments": [s.model_dump() for s in segment.segments],
+                            "speakers": list(segment.speakers),
+                            "language": segment.language,
+                            "model_name": segment.model_name,
+                            "created_at": segment.created_at.isoformat(),
+                        },
+                        asr_file,
+                    )
 
                 console.print(
                     f"[green]✓[/green] Split into {len(segments)} segments "
-                    f"(avg: {sum(s.duration for s in segments)/len(segments)/60:.1f} min)"
+                    f"(avg: {sum(s.duration for s in segments) / len(segments) / 60:.1f} min)"
                 )
 
                 # Update database with split information
@@ -471,6 +472,18 @@ def translation(
         "--segment-by-segment",
         help="Translate segments one by one (with pause between segments)",
     ),
+    parallel: bool = typer.Option(
+        None,
+        "--parallel/--no-parallel",
+        "-p/-P",
+        help="Enable parallel batch translation (default: from config)",
+    ),
+    workers: int = typer.Option(
+        None,
+        "--workers",
+        "-w",
+        help="Number of parallel workers (default: from config, typically 4)",
+    ),
 ) -> None:
     """Batch process translation for all ASR-completed episodes.
 
@@ -481,10 +494,16 @@ def translation(
     - Saves results to episode directory
     - Updates database with completion status
 
+    Parallel Mode:
+    - Use --parallel to enable parallel batch processing (faster)
+    - Use --workers to set the number of concurrent workers
+    - Rate limiting is automatically applied to avoid API throttling
+
     Example:
         podtrans translation
         podtrans translation --data-dir ./data --max-retries 5
         podtrans translation -s en -t zh
+        podtrans translation --parallel --workers 4
     """
     from podtrans.services.database import DatabaseManager
 
@@ -500,9 +519,22 @@ def translation(
         )
         raise typer.Exit(1)
 
+    # Determine parallel settings (CLI overrides config)
+    # 并行设置：CLI 参数优先于配置文件
+    use_parallel = (
+        parallel if parallel is not None else settings.translation_parallel_enabled
+    )
+    num_workers = (
+        workers if workers is not None else settings.translation_parallel_max_workers
+    )
+
     # Handle single episode directory mode
     if episode_dir:
-        console.print(f"[dim]Translation: {source_lang} → {target_lang}[/dim]\n")
+        console.print(f"[dim]Translation: {source_lang} → {target_lang}[/dim]")
+        if use_parallel:
+            console.print(f"[dim]Parallel: enabled ({num_workers} workers)[/dim]\n")
+        else:
+            console.print("[dim]Parallel: disabled (sequential mode)[/dim]\n")
 
         # Initialize translator
         console.print("[bold cyan]🔧 Initializing translator...[/bold cyan]")
@@ -512,10 +544,18 @@ def translation(
             console.print(f"[green]✓[/green] API base: {settings.translation_api_base}")
             console.print(
                 f"[green]✓[/green] Max segments/batch: "
-                f"{settings.translation_max_segments_per_batch}\n"
+                f"{settings.translation_max_segments_per_batch}"
             )
+            if use_parallel:
+                console.print(
+                    f"[green]✓[/green] Parallel workers: {num_workers}, "
+                    f"Rate limit: {settings.translation_rate_limit_per_second} req/s"
+                )
+            console.print()
         except Exception as e:
-            console.print(f"[bold red]❌ Failed to initialize translator: {e}[/bold red]")
+            console.print(
+                f"[bold red]❌ Failed to initialize translator: {e}[/bold red]"
+            )
             raise typer.Exit(1)
 
         # Initialize segment translator
@@ -543,32 +583,37 @@ def translation(
 
                 for i, segment in enumerate(segments, 1):
                     # Check if already translated
-                    translation_file = segment["segment_dir"] / "translation_result.json"
+                    translation_file = (
+                        segment["segment_dir"] / "translation_result.json"
+                    )
                     if translation_file.exists():
-                        console.print(f"✅ Segment {i}/{len(segments)} [{segment['segment_id']}] - Already translated, skipping...")
+                        console.print(
+                            f"✅ Segment {i}/{len(segments)} [{segment['segment_id']}] - Already translated, skipping..."
+                        )
                         continue
 
-                    console.print(f"\n{'='*60}")
-                    console.print(f"[bold]Translating segment {i}/{len(segments)}[/bold]")
+                    console.print(f"\n{'=' * 60}")
+                    console.print(
+                        f"[bold]Translating segment {i}/{len(segments)}[/bold]"
+                    )
                     console.print(f"ID: {segment['segment_id']}")
-                    console.print(f"Time: {segment['start_time']:.1f}s - {segment['end_time']:.1f}s")
-                    console.print(f"{'='*60}")
+                    console.print(
+                        f"Time: {segment['start_time']:.1f}s - {segment['end_time']:.1f}s"
+                    )
+                    console.print(f"{'=' * 60}")
 
                     try:
                         # Translate segment
                         result = segment_translator.translate_segment(
-                            segment,
-                            source_lang=source_lang,
-                            target_lang=target_lang
+                            segment, source_lang=source_lang, target_lang=target_lang
                         )
 
                         # Save result
                         segment_translator.save_translation_result(
-                            segment["segment_dir"],
-                            result
+                            segment["segment_dir"], result
                         )
 
-                        console.print(f"[green]✅ Translation completed![/green]")
+                        console.print("[green]✅ Translation completed![/green]")
                         console.print(f"[dim]Saved to: {segment['segment_dir']}[/dim]")
 
                         # Show created files
@@ -579,11 +624,13 @@ def translation(
                     except Exception as e:
                         console.print(f"[red]❌ Translation failed: {e}[/red]")
                         if max_retries > 0:
-                            console.print(f"[dim]You can retry later with --max-retries {max_retries}[/dim]")
+                            console.print(
+                                f"[dim]You can retry later with --max-retries {max_retries}[/dim]"
+                            )
 
                 # Show final progress
                 progress = segment_translator.get_translation_progress(segments)
-                console.print(f"\n[bold]Translation Summary:[/bold]")
+                console.print("\n[bold]Translation Summary:[/bold]")
                 console.print(f"  Total segments: {progress['total_segments']}")
                 console.print(f"  Completed: {progress['completed_segments']}")
                 console.print(f"  Progress: {progress['progress_percentage']:.1f}%")
@@ -594,17 +641,23 @@ def translation(
                     segments,
                     source_lang=source_lang,
                     target_lang=target_lang,
-                    max_retries=max_retries
+                    max_retries=max_retries,
+                    use_parallel=use_parallel,
+                    max_workers=num_workers,
                 )
 
-                success_count = sum(1 for r in results if r['success'])
-                console.print(f"\n[green]✅[/green] Translation completed: {success_count}/{len(results)} segments")
+                success_count = sum(1 for r in results if r["success"])
+                console.print(
+                    f"\n[green]✅[/green] Translation completed: {success_count}/{len(results)} segments"
+                )
         else:
             console.print("[yellow]⚠️  No segments found in episode directory[/yellow]")
             # Fall back to full episode translation
             asr_file = episode_dir / "asr_result.json"
             if asr_file.exists():
-                console.print("[cyan]🔄 Falling back to full episode translation[/cyan]")
+                console.print(
+                    "[cyan]🔄 Falling back to full episode translation[/cyan]"
+                )
                 _translate_full_episode_direct(
                     asr_file, translator, source_lang, target_lang, console
                 )
@@ -622,7 +675,11 @@ def translation(
 
     db = DatabaseManager(db_path, init_db=False)
 
-    console.print(f"[dim]Translation: {source_lang} → {target_lang}[/dim]\n")
+    console.print(f"[dim]Translation: {source_lang} → {target_lang}[/dim]")
+    if use_parallel:
+        console.print(f"[dim]Parallel: enabled ({num_workers} workers)[/dim]\n")
+    else:
+        console.print("[dim]Parallel: disabled (sequential mode)[/dim]\n")
 
     # Initialize translator
     console.print("[bold cyan]🔧 Initializing translator...[/bold cyan]")
@@ -632,8 +689,14 @@ def translation(
         console.print(f"[green]✓[/green] API base: {settings.translation_api_base}")
         console.print(
             f"[green]✓[/green] Max segments/batch: "
-            f"{settings.translation_max_segments_per_batch}\n"
+            f"{settings.translation_max_segments_per_batch}"
         )
+        if use_parallel:
+            console.print(
+                f"[green]✓[/green] Parallel workers: {num_workers}, "
+                f"Rate limit: {settings.translation_rate_limit_per_second} req/s"
+            )
+        console.print()
     except Exception as e:
         console.print(f"[bold red]❌ Failed to initialize translator: {e}[/bold red]")
         raise typer.Exit(1)
@@ -686,7 +749,9 @@ def translation(
                 segments = segment_translator.discover_segments(episode_dir)
 
                 if not segments:
-                    console.print("[yellow]⚠️  No segments found, falling back to episode mode[/yellow]")
+                    console.print(
+                        "[yellow]⚠️  No segments found, falling back to episode mode[/yellow]"
+                    )
                     # Fall back to episode mode
                     _translate_full_episode(
                         episode, translator, source_lang, target_lang, console, db
@@ -711,16 +776,24 @@ def translation(
                     segments,
                     source_lang=source_lang,
                     target_lang=target_lang,
-                    max_retries=max_retries
+                    max_retries=max_retries,
+                    use_parallel=use_parallel,
+                    max_workers=num_workers,
                 )
 
                 # Update database with results
                 for result in results:
-                    segment = next(s for s in segments if s["segment_id"] == result["segment_id"])
+                    segment = next(
+                        s for s in segments if s["segment_id"] == result["segment_id"]
+                    )
 
                     if result["success"]:
                         # Convert Path to string for database
-                        result_path = str(result["translation_result_path"]) if result.get("translation_result_path") else None
+                        result_path = (
+                            str(result["translation_result_path"])
+                            if result.get("translation_result_path")
+                            else None
+                        )
                         db.update_translation_segment_status(
                             segment["segment_id"],
                             episode_id,
@@ -728,8 +801,8 @@ def translation(
                                 "translation_completed": True,
                                 "translation_result_path": result_path,
                                 "error_count": 0,
-                                "retry_count": 0
-                            }
+                                "retry_count": 0,
+                            },
                         )
                     else:
                         db.update_translation_segment_status(
@@ -739,21 +812,24 @@ def translation(
                                 "translation_completed": False,
                                 "error_count": 1,
                                 "last_error": result["error"],
-                                "retry_count": result.get("retry_count", 0)
-                            }
+                                "retry_count": result.get("retry_count", 0),
+                            },
                         )
 
                 # Check if all segments completed
                 final_progress = segment_translator.get_translation_progress(segments)
-                if final_progress["completed_segments"] == final_progress["total_segments"]:
+                if (
+                    final_progress["completed_segments"]
+                    == final_progress["total_segments"]
+                ):
                     # Update episode as completed
                     db.update_episode_status(
                         episode_id,
                         {
                             "translation_completed": True,
                             "translation_timestamp": datetime.now(),
-                            "retry_count": 0
-                        }
+                            "retry_count": 0,
+                        },
                     )
 
                     # Optionally merge results
@@ -874,7 +950,6 @@ def _translate_full_episode(episode, translator, source_lang, target_lang, conso
     logger.info(f"翻译成功: {episode_title}")
 
 
-
 @app.command()
 def status(
     data_dir: Path = typer.Option(
@@ -929,7 +1004,9 @@ def status(
         _render_status_display(data_dir, show_episodes=episodes)
 
 
-def _translate_full_episode_direct(asr_file, translator, source_lang, target_lang, console):
+def _translate_full_episode_direct(
+    asr_file, translator, source_lang, target_lang, console
+):
     """直接翻译完整剧集（不需要数据库）"""
     episode_dir = asr_file.parent
 
@@ -948,9 +1025,7 @@ def _translate_full_episode_direct(asr_file, translator, source_lang, target_lan
 
     # Translate
     translation_result = translator.translate_asr_result(
-        asr_result=asr_result,
-        source_lang=source_lang,
-        target_lang=target_lang
+        asr_result=asr_result, source_lang=source_lang, target_lang=target_lang
     )
 
     # Save results
@@ -960,13 +1035,13 @@ def _translate_full_episode_direct(asr_file, translator, source_lang, target_lan
 
     # Save Chinese text
     zh_file = episode_dir / "translation_result.zh.txt"
-    with open(zh_file, 'w', encoding='utf-8') as f:
+    with open(zh_file, "w", encoding="utf-8") as f:
         f.write(translation_result.to_chinese_text(include_speakers=False))
     console.print(f"[green]✓[/green] Chinese text saved: {zh_file}")
 
     # Save bilingual text
     bilingual_file = episode_dir / "translation_result.bilingual.txt"
-    with open(bilingual_file, 'w', encoding='utf-8') as f:
+    with open(bilingual_file, "w", encoding="utf-8") as f:
         f.write(translation_result.to_bilingual_text(include_speakers=True))
     console.print(f"[green]✓[/green] Bilingual text saved: {bilingual_file}")
 
