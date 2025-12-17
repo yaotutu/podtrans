@@ -91,7 +91,7 @@ conda activate podtrans
 cp .env.example .env
 # 编辑 .env 文件,填入以下必需的 API keys:
 #   - HF_TOKEN: 从 https://huggingface.co/settings/tokens 获取
-#   - DASHSCOPE_API_KEY: 从 https://dashscope.console.aliyun.com/ 获取
+#   - LLM_API_KEY: 从 https://dashscope.console.aliyun.com/ 或其他 LLM 服务商获取
 
 # 5. 验证安装
 python -c "from podtrans.asr import WhisperXHandler; print('✅ 安装成功!')"
@@ -325,8 +325,8 @@ uv run python scripts/update_baseline.py
 # HuggingFace token (用于说话人分离)
 HF_TOKEN=hf_your_token_here
 
-# DashScope API key (用于翻译)
-DASHSCOPE_API_KEY=sk_your_key_here
+# LLM API key (用于翻译，支持任意 OpenAI 兼容服务)
+LLM_API_KEY=sk_your_key_here
 
 # ============= ASR 配置 =============
 # Whisper 模型大小 (tiny/base/small/medium/large-v2/large-v3)
@@ -339,15 +339,15 @@ DEVICE=cpu
 # 计算精度 (int8 for CPU, float16 for CUDA)
 COMPUTE_TYPE=int8
 
-# ============= 翻译配置 =============
-# Qwen 模型 (qwen-coder-plus/qwen-plus/qwen-turbo)
-TRANSLATION_MODEL=qwen-coder-plus
+# ============= LLM 配置 =============
+# LLM 模型 (qwen-coder-plus/qwen-plus/qwen-turbo)
+LLM_MODEL=qwen-coder-plus
 
 # 每批最大 tokens (默认 120k,适配 128k 上下文模型)
-TRANSLATION_MAX_TOKENS=120000
+LLM_MAX_TOKENS=120000
 
 # 每批最大段落数 (默认 100,提高稳定性)
-TRANSLATION_MAX_SEGMENTS_PER_BATCH=100
+LLM_MAX_SEGMENTS_PER_BATCH=100
 
 # ============= TTS 配置 (可选) =============
 # SoulX-Podcast 服务地址

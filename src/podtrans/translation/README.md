@@ -110,18 +110,18 @@ if len(translations) != len(segments):
 ### 环境变量（.env）
 
 ```bash
-# API 密钥（必需）
-DASHSCOPE_API_KEY=your_api_key_here
+# API 密钥（必需，支持任意 OpenAI 兼容服务）
+LLM_API_KEY=your_api_key_here
 
 # 模型选择
-TRANSLATION_MODEL=qwen3-max
+LLM_MODEL=qwen3-max
 
 # API 端点
-TRANSLATION_API_BASE=https://dashscope.aliyuncs.com/compatible-mode/v1
+LLM_API_BASE=https://dashscope.aliyuncs.com/compatible-mode/v1
 
 # 智能分批参数
-TRANSLATION_MAX_TOKENS=120000              # 每批最大 token 数
-TRANSLATION_MAX_SEGMENTS_PER_BATCH=100     # 每批最大片段数
+LLM_MAX_TOKENS=120000              # 每批最大 token 数
+LLM_MAX_SEGMENTS_PER_BATCH=100     # 每批最大片段数
 
 # 重试设置
 MAX_RETRIES=3
@@ -131,20 +131,20 @@ MAX_RETRIES=3
 
 **对于 128k 上下文模型**：
 ```bash
-TRANSLATION_MAX_TOKENS=120000
-TRANSLATION_MAX_SEGMENTS_PER_BATCH=100
+LLM_MAX_TOKENS=120000
+LLM_MAX_SEGMENTS_PER_BATCH=100
 ```
 
 **对于 32k 上下文模型**：
 ```bash
-TRANSLATION_MAX_TOKENS=30000
-TRANSLATION_MAX_SEGMENTS_PER_BATCH=50
+LLM_MAX_TOKENS=30000
+LLM_MAX_SEGMENTS_PER_BATCH=50
 ```
 
 **提高稳定性（减少丢失）**：
 ```bash
-TRANSLATION_MAX_SEGMENTS_PER_BATCH=50   # 更小批次
-MAX_RETRIES=5                           # 更多重试
+LLM_MAX_SEGMENTS_PER_BATCH=50   # 更小批次
+MAX_RETRIES=5                   # 更多重试
 ```
 
 ## 使用示例
@@ -233,7 +233,7 @@ translator.save_result(translation_result, "output/translation")
 
 ### 问题 1: API Key 未设置
 ```
-Error: DASHSCOPE_API_KEY not set
+Error: LLM_API_KEY not set
 ```
 **解决**：检查 `.env` 文件是否存在并包含正确的 API key
 
@@ -247,7 +247,7 @@ Translation count mismatch: expected 100, got 97
 ```
 Error: maximum context length exceeded
 ```
-**解决**：降低 `TRANSLATION_MAX_TOKENS` 或 `TRANSLATION_MAX_SEGMENTS_PER_BATCH`
+**解决**：降低 `LLM_MAX_TOKENS` 或 `LLM_MAX_SEGMENTS_PER_BATCH`
 
 ## 下一步开发
 

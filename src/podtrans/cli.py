@@ -512,11 +512,11 @@ def translation(
 
     # Check API key
     settings = get_settings()
-    if not settings.dashscope_api_key:
+    if not settings.llm_api_key:
         console.print(
-            "[bold red]❌ Error: DASHSCOPE_API_KEY not set[/bold red]\n"
-            "[dim]Please set your DashScope API key in .env file:[/dim]\n"
-            "DASHSCOPE_API_KEY=your_api_key_here\n"
+            "[bold red]❌ Error: LLM_API_KEY not set[/bold red]\n"
+            "[dim]Please set your LLM API key in .env file:[/dim]\n"
+            "LLM_API_KEY=your_api_key_here\n"
         )
         raise typer.Exit(1)
 
@@ -542,10 +542,10 @@ def translation(
         try:
             translator = Translator(settings)
             console.print(f"[green]✓[/green] Model: {translator.model}")
-            console.print(f"[green]✓[/green] API base: {settings.translation_api_base}")
+            console.print(f"[green]✓[/green] API base: {settings.llm_api_base}")
             console.print(
                 f"[green]✓[/green] Max segments/batch: "
-                f"{settings.translation_max_segments_per_batch}"
+                f"{settings.llm_max_segments_per_batch}"
             )
             if use_parallel:
                 console.print(
@@ -688,10 +688,10 @@ def translation(
     try:
         translator = Translator(settings)
         console.print(f"[green]✓[/green] Model: {translator.model}")
-        console.print(f"[green]✓[/green] API base: {settings.translation_api_base}")
+        console.print(f"[green]✓[/green] API base: {settings.llm_api_base}")
         console.print(
             f"[green]✓[/green] Max segments/batch: "
-            f"{settings.translation_max_segments_per_batch}"
+            f"{settings.llm_max_segments_per_batch}"
         )
         if use_parallel:
             console.print(

@@ -132,11 +132,11 @@ echo "COMPUTE_TYPE=int8" >> .env
 ```
 
 ### 问题 2: 翻译 API 失败
-**错误**: `DashScope API error`
+**错误**: `LLM API error`
 **解决**: 检查 API Key
 ```bash
 # 检查配置
-cat .env | grep DASHSCOPE_API_KEY
+cat .env | grep LLM_API_KEY
 # 如果为空，需要设置你的 API Key
 ```
 

@@ -59,13 +59,13 @@ class Translator:
         """
         self.settings = settings
         self.client = OpenAI(
-            api_key=settings.dashscope_api_key,
-            base_url=settings.translation_api_base,
+            api_key=settings.llm_api_key,
+            base_url=settings.llm_api_base,
         )
-        self.model = settings.translation_model
+        self.model = settings.llm_model
         self.max_retries = settings.max_retries
-        self.max_tokens = settings.translation_max_tokens
-        self.max_segments_per_batch = settings.translation_max_segments_per_batch
+        self.max_tokens = settings.llm_max_tokens
+        self.max_segments_per_batch = settings.llm_max_segments_per_batch
         self.use_json_mode = settings.translation_use_json_mode
 
         # Initialize cache
@@ -99,7 +99,7 @@ class Translator:
 
         logger.info(
             f"Initialized Translator with model={self.model}, "
-            f"base_url={settings.translation_api_base}, "
+            f"base_url={settings.llm_api_base}, "
             f"max_tokens={self.max_tokens}, "
             f"use_json_mode={self.use_json_mode}, "
             f"parallel_enabled={self.parallel_enabled}, "

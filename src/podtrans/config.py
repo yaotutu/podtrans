@@ -36,9 +36,9 @@ class Settings(BaseSettings):
         default="",
         description="HuggingFace token for accessing pyannote models",
     )
-    dashscope_api_key: str = Field(
+    llm_api_key: str = Field(
         default="",
-        description="DashScope API key for translation (Alibaba Qwen models)",
+        description="LLM API 密钥（用于翻译，支持任意 OpenAI 兼容服务）",
     )
 
     # ===================================
@@ -85,76 +85,23 @@ class Settings(BaseSettings):
             "(cuda for NVIDIA GPU, cpu for CPU, mps not supported by faster-whisper)"
         ),
     )
-    translation_model: str = Field(
+    llm_model: str = Field(
         default="qwen-coder-plus",
-        description="Translation model name (DashScope)",
+        description="LLM 模型名称（用于翻译）",
     )
-    translation_api_base: str = Field(
+    llm_api_base: str = Field(
         default="https://dashscope.aliyuncs.com/compatible-mode/v1",
-        description="Translation API base URL (OpenAI-compatible endpoint)",
+        description="LLM API 地址（OpenAI 兼容格式）",
     )
-    translation_max_tokens: int = Field(
+    llm_max_tokens: int = Field(
         default=120000,
         ge=1000,
         le=200000,
-        description="Maximum tokens per translation batch (default: 120k for 128k context models)",
+        description="每批翻译的最大 token 数（默认: 120k，适配 128k 上下文模型）",
     )
     translation_use_json_mode: bool = Field(
         default=False,
         description="Use JSON mode for translation API (experimental)",
-    )
-
-    # ===================================
-    # SoulX CLI Configuration
-    soulx_cli_path: str = Field(
-        default="soulx-podcast",
-        description="Path to SoulX-Podcast CLI executable",
-    )
-    soulx_cli_model: str = Field(
-        default="SoulX-Podcast-1.7B",
-        description="SoulX CLI model name",
-    )
-    soulx_cli_timeout: int = Field(
-        default=10800,  # 3 hours
-        ge=60,
-        le=21600,  # 6 hours max
-        description="SoulX CLI timeout in seconds (default: 10800 = 3 hours)",
-    )
-    soulx_cli_temperature: float = Field(
-        default=0.7,
-        ge=0.1,
-        le=2.0,
-        description="SoulX CLI generation temperature",
-    )
-    soulx_cli_top_p: float = Field(
-        default=0.9,
-        ge=0.1,
-        le=1.0,
-        description="SoulX CLI top-p sampling",
-    )
-    soulx_conda_env: str = Field(
-        default="soulxpodcast",
-        description="Conda environment name for SoulX CLI",
-    )
-
-    # ===================================
-    # Simple SoulX Configuration (New Simplified Version)
-    # ===================================
-    soulx_cli_script: str = Field(
-        default="soulx_cli.py",
-        description="Path to SoulX CLI Python script (simplified version)",
-    )
-    soulx_cli_working_dir: str = Field(
-        default=".",
-        description="Working directory for SoulX CLI execution",
-    )
-    soulx_cli_conda_env: str = Field(
-        default="soulxpodcast",
-        description="Conda environment name for SoulX CLI execution",
-    )
-    soulx_cli_model_path: str = Field(
-        default="/home/yaotutu/SoulX-Podcast-main/pretrained_models/SoulX-Podcast-1.7B",
-        description="Default model path for SoulX CLI execution",
     )
 
     # ===================================
@@ -274,14 +221,11 @@ class Settings(BaseSettings):
         le=64,
         description="Batch size for ASR processing",
     )
-    translation_max_segments_per_batch: int = Field(
+    llm_max_segments_per_batch: int = Field(
         default=100,
         ge=1,
         le=500,
-        description=(
-            "Maximum number of segments per translation batch "
-            "(even if tokens allow more). Recommended: 50-100 for stability."
-        ),
+        description="每批翻译的最大段落数（推荐: 50-100）",
     )
 
     # ===================================

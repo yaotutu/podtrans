@@ -61,8 +61,7 @@ cp .env.example .env
 
 # 4. 编辑 .env 文件，填入必需的 API keys:
 #    - HF_TOKEN: HuggingFace token (用于说话人分离)
-#    - DASHSCOPE_API_KEY: 阿里云 DashScope API key (用于翻译)
-#    - SOULX_API_URL: SoulX-Podcast 服务地址 (可选)
+#    - LLM_API_KEY: LLM API key (用于翻译，支持任意 OpenAI 兼容服务)
 ```
 
 ### API Keys 获取
@@ -74,9 +73,10 @@ cp .env.example .env
      - https://huggingface.co/pyannote/speaker-diarization-3.1
      - https://huggingface.co/pyannote/segmentation-3.0
 
-2. **DASHSCOPE_API_KEY** (阿里云):
-   - 访问 https://dashscope.console.aliyun.com/
-   - 创建 API Key
+2. **LLM_API_KEY** (LLM 服务):
+   - DashScope (阿里云): https://dashscope.console.aliyun.com/
+   - OpenAI: https://platform.openai.com/api-keys
+   - 其他 OpenAI 兼容服务
 
 ---
 
@@ -289,10 +289,10 @@ podtrans/
 - 开销估算: 系统 prompt 500 + 每段输出 100 tokens
 
 **关键配置**:
-- `TRANSLATION_MODEL`: qwen-max/qwen-plus/qwen-turbo (默认: qwen-max)
-- `TRANSLATION_MAX_TOKENS`: 120000
-- `TRANSLATION_MAX_SEGMENTS_PER_BATCH`: 100
-- `TRANSLATION_MAX_RETRIES`: 3
+- `LLM_MODEL`: qwen-max/qwen-plus/qwen-turbo (默认: qwen-max)
+- `LLM_MAX_TOKENS`: 120000
+- `LLM_MAX_SEGMENTS_PER_BATCH`: 100
+- `MAX_RETRIES`: 3
 
 **已知问题**:
 - API 偶尔返回数量不匹配（2-3% 丢失率）
@@ -363,12 +363,12 @@ settings.whisper_model
 | 配置项 | 环境变量 | 默认值 | 说明 |
 |--------|---------|--------|------|
 | HF Token | `HF_TOKEN` | None | HuggingFace token |
-| DashScope Key | `DASHSCOPE_API_KEY` | None | 翻译 API key |
+| LLM API Key | `LLM_API_KEY` | None | LLM 翻译 API key |
 | Whisper 模型 | `WHISPER_MODEL` | medium | ASR 模型大小 |
 | 设备 | `DEVICE` | cpu | cuda/cpu |
-| 翻译模型 | `TRANSLATION_MODEL` | qwen-max | Qwen 模型 |
-| 批次大小 | `TRANSLATION_MAX_SEGMENTS_PER_BATCH` | 100 | 每批段落数 |
-| Token 限制 | `TRANSLATION_MAX_TOKENS` | 120000 | 每批 tokens |
+| LLM 模型 | `LLM_MODEL` | qwen-max | 翻译使用的 LLM 模型 |
+| 批次大小 | `LLM_MAX_SEGMENTS_PER_BATCH` | 100 | 每批段落数 |
+| Token 限制 | `LLM_MAX_TOKENS` | 120000 | 每批 tokens |
 
 ### 数据模型
 
@@ -556,10 +556,10 @@ vim data/baseline/README.md
 - 获取: https://huggingface.co/settings/tokens
 - 授权: 需接受 pyannote 模型使用协议
 
-**DASHSCOPE_API_KEY** (阿里云):
-- 用途: 调用 Qwen 模型进行翻译
+**LLM_API_KEY** (LLM 服务):
+- 用途: 调用 LLM 模型进行翻译（支持任意 OpenAI 兼容服务）
 - 必需性: 翻译模块必需
-- 获取: https://dashscope.console.aliyun.com/
+- 获取: DashScope https://dashscope.console.aliyun.com/ 或 OpenAI https://platform.openai.com/api-keys
 
 ### 3. 数据目录
 
