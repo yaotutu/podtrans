@@ -85,7 +85,11 @@
       "Bash(grep:*)",
       "Bash(/home/yaotutu/miniconda3/bin/conda:*)",
       "Bash(zsh:*)",
-      "Bash(OUTPUT_DIR=./output /home/yaotutu/miniconda3/envs/podtrans/bin/python:*)"
+      "Bash(OUTPUT_DIR=./output /home/yaotutu/miniconda3/envs/podtrans/bin/python:*)",
+      "Bash(/home/yaotutu/SoulX-Podcast/podcast_queue/podcast-queue submit:*)",
+      "Bash(/home/yaotutu/SoulX-Podcast/podcast_queue/podcast-queue status --help)",
+      "Bash(/home/yaotutu/SoulX-Podcast/podcast_queue/podcast-queue list:*)",
+      "Bash(/home/yaotutu/SoulX-Podcast/podcast_queue/podcast-queue status:*)"
     ],
     "deny": [],
     "ask": []

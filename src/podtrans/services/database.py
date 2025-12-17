@@ -70,12 +70,7 @@ class DatabaseManager:
                     convert_result_path TEXT,
                     convert_format TEXT,
 
-                    -- Synthesize stage (audio generation)
-                    synthesize_completed BOOLEAN DEFAULT FALSE,
-                    synthesize_timestamp TIMESTAMP,
-                    synthesize_result_path TEXT,
-
-                    -- Legacy TTS stage (deprecated)
+                    -- TTS stage (audio generation)
                     tts_completed BOOLEAN DEFAULT FALSE,
                     tts_timestamp TIMESTAMP,
                     tts_result_path TEXT,

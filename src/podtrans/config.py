@@ -158,6 +158,20 @@ class Settings(BaseSettings):
     )
 
     # ===================================
+    # TTS Configuration (podcast-tts CLI)
+    # ===================================
+    tts_cli_path: str = Field(
+        default="podcast-tts",
+        description="Path to podcast-tts CLI executable",
+    )
+    tts_timeout: int = Field(
+        default=3600,  # 1 hour
+        ge=60,
+        le=14400,  # 4 hours max
+        description="TTS CLI timeout in seconds (default: 3600 = 1 hour)",
+    )
+
+    # ===================================
     # Audio Segmentation Configuration
     audio_segment_max_duration: float = Field(
         default=600.0,

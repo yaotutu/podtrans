@@ -1006,6 +1006,126 @@ def status(
         _render_status_display(data_dir, show_episodes=episodes)
 
 
+@app.command()
+def tts(
+    data_dir: Path = typer.Option(
+        Path("./data"),
+        "--data-dir",
+        "-d",
+        help="Data directory path",
+    ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        "-n",
+        help="只显示待处理剧集，不执行",
+    ),
+    max_retries: int = typer.Option(
+        3,
+        "--max-retries",
+        help="Maximum retry count for failed episodes",
+    ),
+) -> None:
+    """Execute TTS for translation-completed episodes.
+
+    This command:
+    - Queries database for episodes with translation_completed=True
+      and tts_completed=False
+    - Executes podcast-tts CLI (blocking)
+    - Updates database with completion status
+
+    Example:
+        podtrans tts              # 处理一个待处理剧集
+        podtrans tts --dry-run    # 只显示，不执行
+    """
+    from podtrans.services.database import DatabaseManager
+    from podtrans.services.tts_service import TTSService
+
+    console.print("\n[bold blue]🔊 PodTrans - TTS Processing[/bold blue]\n")
+
+    # Initialize database
+    settings = get_settings()
+    db_path = settings.get_database_dir() / "episodes.db"
+    if not db_path.exists():
+        console.print(f"[bold red]❌ Database not found: {db_path}[/bold red]")
+        raise typer.Exit(1)
+
+    db = DatabaseManager(db_path, init_db=False)
+
+    # Initialize TTS service
+    tts_service = TTSService(
+        cli_path=settings.tts_cli_path,
+        timeout=settings.tts_timeout,
+    )
+    console.print(f"[dim]TTS CLI: {settings.tts_cli_path}[/dim]")
+    console.print(f"[dim]Timeout: {settings.tts_timeout}s[/dim]\n")
+
+    # Query pending episodes
+    episodes = db.get_pending_episodes(stage="tts")
+    episodes = [ep for ep in episodes if ep.get("retry_count", 0) < max_retries]
+
+    if not episodes:
+        console.print("[green]✅ No episodes pending for TTS processing[/green]")
+        return
+
+    # Show pending episodes
+    console.print(f"[bold]Found {len(episodes)} pending episode(s)[/bold]\n")
+    for i, ep in enumerate(episodes, 1):
+        console.print(f"  {i}. {ep['episode_title']}")
+        console.print(f"     [dim]{ep['episode_dir']}[/dim]")
+
+    if dry_run:
+        console.print("\n[yellow]--dry-run: Not executing[/yellow]")
+        return
+
+    # Process only the first episode (single processing mode)
+    episode = episodes[0]
+    episode_id = episode["id"]
+    episode_title = episode["episode_title"]
+    episode_dir = Path(episode["episode_dir"])
+
+    console.print(f"\n[bold cyan]Processing:[/bold cyan] {episode_title}")
+    console.print(f"[dim]Directory: {episode_dir}[/dim]")
+
+    # Execute TTS
+    logger.info(f"开始 TTS 处理: {episode_title}")
+    result = tts_service.execute(episode_dir)
+
+    if result.success:
+        # Update database
+        db.update_episode_status(
+            episode_id,
+            {
+                "tts_completed": True,
+                "tts_timestamp": datetime.now(),
+                "tts_result_path": result.output_path,
+                "retry_count": 0,  # Reset retry count on success
+            },
+        )
+
+        console.print("\n[green]✅ TTS completed successfully![/green]")
+        console.print(f"[dim]Output: {result.output_path}[/dim]")
+        if result.duration:
+            console.print(f"[dim]Duration: {result.duration:.1f}s[/dim]")
+        logger.info(f"TTS 处理成功: {episode_title}")
+
+    else:
+        # Update database with error
+        current_retry = episode.get("retry_count", 0)
+        db.update_episode_status(
+            episode_id,
+            {
+                "retry_count": current_retry + 1,
+                "error_count": episode.get("error_count", 0) + 1,
+                "last_error": result.error,
+            },
+        )
+
+        console.print(f"\n[red]❌ TTS failed: {result.error}[/red]")
+        logger.error(f"TTS 处理失败: {episode_title}: {result.error}")
+        raise typer.Exit(1)
+
+
 def _translate_full_episode_direct(
     asr_file, translator, source_lang, target_lang, console
 ):
