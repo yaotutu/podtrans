@@ -181,10 +181,10 @@ def main():
         console.print(f"[cyan]ASR 结果:[/cyan] {asr_result_path}")
         console.print(f"[cyan]Voice Samples:[/cyan] {voice_samples_dir}")
     else:
-        # 否则尝试从 data/output 查找
-        data_output = Path("data/output")
+        # 否则尝试从 output 查找
+        data_output = Path("output")
         if not data_output.exists():
-            console.print("[red]data/output 目录不存在[/red]")
+            console.print("[red]output 目录不存在[/red]")
             return
 
         # 找到最新的处理目录

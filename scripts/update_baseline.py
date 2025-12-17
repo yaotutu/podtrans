@@ -12,7 +12,7 @@ console = Console()
 
 def main():
     baseline_dir = Path("data/baseline/demo_v1_baseline")
-    current_dir = Path("data/output/demo")
+    current_dir = Path("output/demo")
     archive_dir = Path("data/baseline/archive")
 
     if not current_dir.exists():

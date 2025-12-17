@@ -21,6 +21,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from .services.database import DatabaseManager
 from .rss_config import RSSFeedConfig, GlobalSettings
+from .config import get_settings
 
 
 def clean_title_for_folder(title: str, max_length: int = 50) -> str:
@@ -103,11 +104,14 @@ def generate_episode_folder_name(title: str, pub_date_str: str) -> str:
 class RSSProcessor:
     """RSS处理器 - 负责RSS feed的解析和音频下载"""
 
-    def __init__(self, data_dir: Path = Path("./data"), global_settings: Optional[GlobalSettings] = None):
+    def __init__(self, data_dir: Path = Path("./data"), global_settings: Optional[GlobalSettings] = None, settings=None):
         self.data_dir = Path(data_dir)
-        self.db_path = self.data_dir / "episodes.db"
-        self.db = DatabaseManager(self.db_path)
         self.global_settings = global_settings or GlobalSettings()
+        # Use settings parameter if provided, otherwise get from global config
+        if settings is None:
+            settings = get_settings()
+        self.db_path = settings.get_database_dir() / "episodes.db"
+        self.db = DatabaseManager(self.db_path)
 
     async def process_rss(
         self,
@@ -329,7 +333,8 @@ class RSSProcessor:
 # RSS模块接口 - 提供给外层的简单接口
 def create_rss_processor(data_dir: str = "./data", global_settings: Optional[GlobalSettings] = None) -> RSSProcessor:
     """创建RSS处理器"""
-    return RSSProcessor(Path(data_dir), global_settings)
+    settings = get_settings()
+    return RSSProcessor(Path(data_dir), global_settings, settings)
 
 
 async def start_rss_processing(

@@ -45,8 +45,16 @@ class Settings(BaseSettings):
     # Application Configuration
     # ===================================
     output_dir: Path = Field(
-        default=Path("./data/output"),
+        default=Path("./output"),
         description="Output directory for processed files",
+    )
+    cache_dir: Path = Field(
+        default=Path("./cache"),
+        description="Cache directory for models and translations",
+    )
+    database_dir: Path = Field(
+        default=Path("./database"),
+        description="Database directory for episode tracking",
     )
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = Field(
         default="INFO",
@@ -340,7 +348,7 @@ class Settings(BaseSettings):
         description="Maximum retries for API calls and downloads",
     )
 
-    @field_validator("output_dir", "log_dir")
+    @field_validator("output_dir", "log_dir", "cache_dir", "database_dir")
     @classmethod
     def create_dir_if_not_exists(cls, v: Path) -> Path:
         """Create directory if it doesn't exist."""
@@ -373,10 +381,12 @@ class Settings(BaseSettings):
         return self.device in ("cuda", "mps")
 
     def get_cache_dir(self) -> Path:
-        """Get cache directory path."""
-        cache_dir = Path("./data/cache")
-        cache_dir.mkdir(parents=True, exist_ok=True)
-        return cache_dir
+        """Get cache directory path (already validated and created)."""
+        return self.cache_dir
+
+    def get_database_dir(self) -> Path:
+        """Get database directory path (already validated and created)."""
+        return self.database_dir
 
     def get_input_dir(self) -> Path:
         """Get input directory path."""

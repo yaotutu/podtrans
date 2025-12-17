@@ -150,7 +150,7 @@ def compare_versions(baseline_dir: Path, current_dir: Path):
 
 def main():
     baseline_dir = Path("data/baseline/demo_v1_baseline")
-    current_dir = Path("data/output/demo")
+    current_dir = Path("output/demo")
 
     if not baseline_dir.exists():
         console.print("[red]❌ Baseline not found![/red]")

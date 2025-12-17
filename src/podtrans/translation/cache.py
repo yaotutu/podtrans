@@ -31,7 +31,9 @@ class TranslationCache:
                       Defaults to ./data/cache/translations
         """
         if cache_dir is None:
-            cache_dir = Path("./data/cache/translations")
+            from ..config import get_settings
+            settings = get_settings()
+            cache_dir = settings.get_cache_dir() / "translations"
         else:
             cache_dir = Path(cache_dir)
 

@@ -76,7 +76,16 @@
       "Bash(/home/yaotutu/miniconda3/envs/podtrans/bin/ruff format src/podtrans/asr/voice_sample.py src/podtrans/cli.py)",
       "Bash(/home/yaotutu/miniconda3/envs/podtrans/bin/ruff format:*)",
       "Bash(git checkout:*)",
-      "Bash(cut:*)"
+      "Bash(cut:*)",
+      "Bash(mkdir:*)",
+      "Bash(strace:*)",
+      "Bash(unset:*)",
+      "Bash(/home/yaotutu/miniconda3/bin/conda env config vars list:*)",
+      "Bash(echo:*)",
+      "Bash(grep:*)",
+      "Bash(/home/yaotutu/miniconda3/bin/conda:*)",
+      "Bash(zsh:*)",
+      "Bash(OUTPUT_DIR=./output /home/yaotutu/miniconda3/envs/podtrans/bin/python:*)"
     ],
     "deny": [],
     "ask": []

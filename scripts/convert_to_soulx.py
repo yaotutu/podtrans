@@ -10,8 +10,8 @@ from podtrans.utils.file import read_json
 
 def main():
     # Input and output paths
-    translation_json = Path("data/output/demo/translation_result.json")
-    output_json = Path("data/output/demo/soulx_script.json")
+    translation_json = Path("output/demo/translation_result.json")
+    output_json = Path("output/demo/soulx_script.json")
 
     # Load translation result
     print(f"Loading translation result from: {translation_json}")

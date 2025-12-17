@@ -89,10 +89,10 @@ cp .env.example .env
 python -m podtrans.cli transcribe data/input/demo.mp3
 
 # 2. 翻译
-python -m podtrans.cli translate data/output/demo/asr_result.json
+python -m podtrans.cli translate output/demo/asr_result.json
 
 # 3. TTS - 音频生成 (需要外部 SoulX 服务)
-python -m podtrans.cli synthesize data/output/demo/translation_result.json
+python -m podtrans.cli synthesize output/demo/translation_result.json
 ```
 
 ### ASR 选项
@@ -503,7 +503,7 @@ vim src/podtrans/translation/translator.py
 
 # 2. 重新运行流程
 uv run podtrans transcribe data/input/demo.mp3
-uv run podtrans translate data/output/demo/asr_result.json
+uv run podtrans translate output/demo/asr_result.json
 
 # 3. 对比结果
 uv run python scripts/compare_with_baseline.py
@@ -576,7 +576,7 @@ data/
 
 **Git 管理**:
 - ✅ 提交: `data/baseline/demo_v1_baseline/`, `data/baseline/README.md`
-- ❌ 忽略: `data/input/*`, `data/output/*`, `data/cache/*`, `data/baseline/archive/*`
+- ❌ 忽略: `data/input/*`, `output/*`, `cache/*`, `database/*`, `data/baseline/archive/*`
 
 ### 4. 错误处理
 

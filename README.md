@@ -114,15 +114,15 @@ cp your_podcast.mp3 data/input/
 
 # Step 1: ASR - 语音识别 + 说话人分离
 python -m podtrans.cli transcribe data/input/your_podcast.mp3
-# 输出: data/output/your_podcast/asr_result.json
+# 输出: output/your_podcast/asr_result.json
 
 # Step 2: Translation - 智能批处理翻译
-python -m podtrans.cli translate data/output/your_podcast/asr_result.json
-# 输出: data/output/your_podcast/translation_result.json
+python -m podtrans.cli translate output/your_podcast/asr_result.json
+# 输出: output/your_podcast/translation_result.json
 
 # Step 3: TTS - 多说话人语音合成 (需要外部 SoulX 服务)
-python -m podtrans.cli synthesize data/output/your_podcast/translation_result.json
-# 输出: data/output/your_podcast/output.wav
+python -m podtrans.cli synthesize output/your_podcast/translation_result.json
+# 输出: output/your_podcast/output.wav
 ```
 
 ### 常用选项

@@ -124,3 +124,8 @@ credentials.json
 uv.lock
 condaenv.*.requirements.txt
 data/*
+
+
+data/*
+database/*
+cache/*

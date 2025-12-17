@@ -8,7 +8,7 @@ from podtrans.tts.soulx.converter import SoulXConverter
 from podtrans.utils.file import read_json
 
 # Load translation result
-translation_json = Path("data/output/demo/translation_result.json")
+translation_json = Path("output/demo/translation_result.json")
 translation_data = read_json(translation_json)
 translation_result = TranslationResult(**translation_data)
 

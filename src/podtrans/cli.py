@@ -220,7 +220,8 @@ def asr(
     console.print("\n[bold blue]🎙️  PodTrans - Batch ASR Processing[/bold blue]\n")
 
     # Initialize database
-    db_path = data_dir / "episodes.db"
+    settings = get_settings()
+    db_path = settings.get_database_dir() / "episodes.db"
     if not db_path.exists():
         console.print(f"[bold red]❌ Database not found: {db_path}[/bold red]")
         raise typer.Exit(1)
@@ -668,7 +669,8 @@ def translation(
         return
 
     # Initialize database for batch mode
-    db_path = data_dir / "episodes.db"
+    settings = get_settings()
+    db_path = settings.get_database_dir() / "episodes.db"
     if not db_path.exists():
         console.print(f"[bold red]❌ Database not found: {db_path}[/bold red]")
         raise typer.Exit(1)

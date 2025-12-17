@@ -26,7 +26,7 @@ max_retries = 3
 [[rss_feeds]]
 name = "All-In Podcast"
 url = "https://feeds.simplecast.com/54nAGcIl"
-enabled = true
+enabled = false
 download_mode = "latest"                      # 可选值: "latest" 或 "all"
 download_count = 2                            # 仅在 download_mode = "latest" 时有效
 
@@ -34,7 +34,7 @@ download_count = 2                            # 仅在 download_mode = "latest" 
 [[rss_feeds]]
 name = "atp"
 url = "https://atp.fm/episodes?format=rss"
-enabled = true
+enabled = false
 download_mode = "latest"
 download_count = 3
 # download_count 在 mode="all" 时无效，可以省略

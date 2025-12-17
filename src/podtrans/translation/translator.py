@@ -55,7 +55,7 @@ class Translator:
         Args:
             settings: Application settings
             enable_cache: Whether to enable translation cache (default: True)
-            cache_dir: Cache directory (default: ./data/cache/translations)
+            cache_dir: Cache directory (default: ./cache/translations)
         """
         self.settings = settings
         self.client = OpenAI(
