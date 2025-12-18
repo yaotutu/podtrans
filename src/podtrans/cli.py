@@ -1168,6 +1168,903 @@ def _translate_full_episode_direct(
     console.print(f"[green]✓[/green] Bilingual text saved: {bilingual_file}")
 
 
+# ===================================
+# 智谱批量翻译命令组
+# ===================================
+zhipu_batch_app = typer.Typer(
+    name="zhipu-batch-translate",
+    help="智谱 Batch API 批量翻译（价格为标准 API 的 50%）",
+    add_completion=False,
+    invoke_without_command=True,  # 允许直接运行主命令
+)
+app.add_typer(zhipu_batch_app, name="zhipu-batch-translate")
+
+
+@zhipu_batch_app.callback()
+def zhipu_batch_main(
+    ctx: typer.Context,
+    data_dir: Path = typer.Option(
+        Path("./data"),
+        "--data-dir",
+        "-d",
+        help="数据目录路径",
+    ),
+    source_lang: str = typer.Option(
+        "en",
+        "--source-lang",
+        "-s",
+        help="源语言代码",
+    ),
+    target_lang: str = typer.Option(
+        "zh",
+        "--target-lang",
+        "-t",
+        help="目标语言代码",
+    ),
+    max_retries: int = typer.Option(
+        3,
+        "--max-retries",
+        help="最大重试次数",
+    ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        "-n",
+        help="只显示待处理内容，不实际执行",
+    ),
+) -> None:
+    """智谱 Batch API 批量翻译（价格为标准 API 的 50%）。
+
+    自动查询待翻译剧集，提交批量任务，等待完成，保存结果。
+    与 'podtrans translation' 命令逻辑一致，但使用智谱 Batch API。
+
+    示例:
+        podtrans zhipu-batch-translate              # 处理所有待翻译剧集
+        podtrans zhipu-batch-translate --dry-run   # 只显示待处理内容
+        podtrans zhipu-batch-translate status xxx   # 查看任务状态（子命令）
+    """
+    # 如果调用了子命令，跳过主逻辑
+    if ctx.invoked_subcommand is not None:
+        return
+
+
+    from podtrans.services.database import DatabaseManager
+    from podtrans.translation.zhipu_batch import ZhipuBatchTranslator
+    from podtrans.translation.zhipu_batch.client import ZhipuAuthError
+
+    console.print("\n[bold blue]📦 智谱 Batch API 批量翻译[/bold blue]\n")
+
+    settings = get_settings()
+
+    # 检查 API Key
+    if not settings.zhipu_api_key:
+        console.print("[bold red]❌ 未配置 ZHIPU_API_KEY[/bold red]")
+        console.print("[dim]请在 .env 文件中设置 ZHIPU_API_KEY[/dim]")
+        raise typer.Exit(1)
+
+    console.print(f"[dim]模型: {settings.zhipu_batch_model}[/dim]")
+    console.print(f"[dim]轮询间隔: {settings.zhipu_batch_poll_interval}s[/dim]")
+    console.print(f"[dim]数据目录: {data_dir}[/dim]\n")
+
+    # 初始化数据库
+    db_path = settings.get_database_dir() / "episodes.db"
+    if not db_path.exists():
+        console.print(f"[bold red]❌ 数据库不存在: {db_path}[/bold red]")
+        console.print("[dim]请先运行 'podtrans rss' 和 'podtrans asr'[/dim]")
+        raise typer.Exit(1)
+
+    db = DatabaseManager(db_path, init_db=False)
+
+    # 初始化��译器
+    try:
+        translator = ZhipuBatchTranslator()
+    except ZhipuAuthError as e:
+        console.print(f"[bold red]❌ 认证失败: {e}[/bold red]")
+        raise typer.Exit(1)
+
+    success_count = 0
+    failed_count = 0
+    processed_ids: set[int] = set()
+
+    # 主循环：处理所有待翻译剧集
+    while True:
+        # 查询待翻译剧集
+        episodes = db.get_pending_episodes(stage="translation")
+        episodes = [
+            ep
+            for ep in episodes
+            if ep.get("retry_count", 0) < max_retries and ep["id"] not in processed_ids
+        ]
+
+        if not episodes:
+            if success_count == 0 and failed_count == 0:
+                console.print("[green]✅ 没有待翻译的剧集[/green]")
+            break
+
+        episode = episodes[0]
+        processed_ids.add(episode["id"])
+
+        episode_id = episode["id"]
+        episode_title = episode["episode_title"]
+        episode_dir = Path(episode["episode_dir"])
+
+        total_pending = len(episodes)
+        console.print(
+            f"\n[bold]翻译中[/bold] (待处理: {total_pending}): {episode_title}"
+        )
+        console.print(f"[dim]目录: {episode_dir}[/dim]")
+
+        if dry_run:
+            console.print("[yellow]--dry-run: 跳过实际处理[/yellow]")
+            continue
+
+        try:
+            # 检查片段模式 vs 完整剧集模式
+            segments_dir = episode_dir / "segments"
+            segment_metadata_file = episode_dir / "segment_metadata.json"
+
+            if segments_dir.exists() and segment_metadata_file.exists():
+                # 片段模式：处理 segments 目录下的分片
+                console.print("[cyan]🔄 片段模式[/cyan]")
+                _zhipu_batch_translate_segments(
+                    episode, episode_dir, segments_dir,
+                    translator, source_lang, target_lang,
+                    db, console, settings
+                )
+            else:
+                # 完整剧集模式
+                console.print("[cyan]🔄 完整剧集模式[/cyan]")
+                _zhipu_batch_translate_episode(
+                    episode, episode_dir,
+                    translator, source_lang, target_lang,
+                    db, console, settings
+                )
+
+            success_count += 1
+            console.print(f"[green]✅ 翻译成功[/green]: {episode_title}\n")
+
+        except KeyboardInterrupt:
+            console.print("\n[yellow]⚠️  用户中断[/yellow]")
+            raise typer.Exit(1)
+
+        except Exception as e:
+            failed_count += 1
+            error_msg = str(e)
+
+            # 更新数据库错误状态
+            current_retry = episode.get("retry_count", 0)
+            db.update_episode_status(
+                episode_id,
+                {
+                    "retry_count": current_retry + 1,
+                    "error_count": episode.get("error_count", 0) + 1,
+                    "last_error": error_msg,
+                },
+            )
+
+            console.print(f"[red]❌ 翻译失败[/red]: {error_msg}\n")
+            logger.error(f"智谱批量翻译失败: {episode_title}: {error_msg}")
+
+    # 打印汇总
+    if success_count > 0 or failed_count > 0:
+        console.print("\n" + "=" * 50)
+        console.print("[bold]翻译汇总[/bold]")
+        console.print(f"  成功: [green]{success_count}[/green]")
+        console.print(f"  失败: [red]{failed_count}[/red]")
+        console.print("=" * 50 + "\n")
+
+
+def _zhipu_batch_translate_episode(
+    episode: dict,
+    episode_dir: Path,
+    translator,
+    source_lang: str,
+    target_lang: str,
+    db,
+    console,
+    settings,
+) -> None:
+    """使用智谱 Batch API 翻译完整剧集。"""
+    import json
+
+    from podtrans.translation.zhipu_batch.translator import (
+        results_to_translation_result,
+        segments_from_asr_result,
+    )
+
+    episode_id = episode["id"]
+    asr_file = episode_dir / "asr_result.json"
+
+    if not asr_file.exists():
+        raise FileNotFoundError(f"ASR 结果不存在: {asr_file}")
+
+    # 加载 ASR 结果
+    with open(asr_file, encoding="utf-8") as f:
+        asr_result = json.load(f)
+
+    segments = segments_from_asr_result(asr_result)
+    if not segments:
+        raise ValueError("ASR 结果为空")
+
+    console.print(f"[dim]段落数: {len(segments)}[/dim]")
+
+    # 提交批量任务
+    console.print("[dim]提交批量任务...[/dim]")
+    job = translator.submit(
+        segments=segments,
+        source_lang=source_lang,
+        target_lang=target_lang,
+        episode_id=str(episode_id),
+    )
+    console.print(f"[dim]batch_id: {job.batch_id}[/dim]")
+
+    # 等待完成
+    console.print("[dim]等待任务完成...[/dim]")
+
+    def status_callback(status):
+        progress = f"{status.completed_requests}/{status.total_requests}"
+        console.print(f"  [dim]状态: {status.status.value}, 进度: {progress}[/dim]")
+
+    final_status = translator.wait_for_completion(
+        batch_id=job.batch_id,
+        callback=status_callback,
+    )
+
+    if not final_status.is_success:
+        raise RuntimeError(f"批量任务失败: {final_status.status.value}")
+
+    # 获取结果
+    console.print("[dim]获取翻译结果...[/dim]")
+    translated_segments = translator.fetch_results(job, segments)
+
+    # 转换为标准格式
+    result = results_to_translation_result(
+        translated_segments,
+        source_lang=source_lang,
+        target_lang=target_lang,
+        model=settings.zhipu_batch_model,
+    )
+
+    # 保存结果
+    result_path = episode_dir / "translation_result.json"
+    with open(result_path, "w", encoding="utf-8") as f:
+        json.dump(result, f, ensure_ascii=False, indent=2)
+    console.print(f"[green]✓[/green] 翻译结果: {result_path}")
+
+    # 保存中文文本
+    zh_file = episode_dir / "translation_result.zh.txt"
+    with open(zh_file, "w", encoding="utf-8") as f:
+        for seg in result["segments"]:
+            speaker = seg.get("speaker") or ""
+            text = seg.get("translated_text", "")
+            if speaker:
+                f.write(f"[{speaker}] {text}\n")
+            else:
+                f.write(f"{text}\n")
+    console.print(f"[green]✓[/green] 中文文本: {zh_file}")
+
+    # 保存双语文本
+    bilingual_file = episode_dir / "translation_result.bilingual.txt"
+    with open(bilingual_file, "w", encoding="utf-8") as f:
+        for seg in result["segments"]:
+            speaker = seg.get("speaker") or ""
+            original = seg.get("original_text", "")
+            translated = seg.get("translated_text", "")
+            if speaker:
+                f.write(f"[{speaker}]\n")
+            f.write(f"EN: {original}\n")
+            f.write(f"ZH: {translated}\n\n")
+    console.print(f"[green]✓[/green] 双语文本: {bilingual_file}")
+
+    # 更新数据库
+    db.update_episode_status(
+        episode_id,
+        {
+            "translation_completed": True,
+            "translation_result_path": str(result_path),
+            "translation_timestamp": datetime.now(),
+            "retry_count": 0,
+        },
+    )
+
+
+def _zhipu_batch_translate_segments(
+    episode: dict,
+    episode_dir: Path,
+    segments_dir: Path,
+    translator,
+    source_lang: str,
+    target_lang: str,
+    db,
+    console,
+    settings,
+) -> None:
+    """使用智谱 Batch API 翻译分片剧集。
+
+    目录结构：
+        segments/
+            segment_001/
+                asr_result.json
+                translation_result.json  (输出)
+            segment_002/
+                asr_result.json
+                translation_result.json  (输出)
+    """
+    import json
+
+    from podtrans.translation.zhipu_batch.translator import (
+        results_to_translation_result,
+        segments_from_asr_result,
+    )
+
+    episode_id = episode["id"]
+
+    # 查找所有片段目录（结构: segments/segment_001/, segments/segment_002/, ...）
+    segment_dirs = sorted(
+        [d for d in segments_dir.glob("segment_*") if d.is_dir()]
+    )
+    if not segment_dirs:
+        raise FileNotFoundError(f"未找到片段目录: {segments_dir}")
+
+    console.print(f"[dim]分片数: {len(segment_dirs)}[/dim]")
+
+    completed_count = 0
+    total_count = len(segment_dirs)
+
+    # 逐个处理分片
+    for i, segment_dir in enumerate(segment_dirs, 1):
+        segment_name = segment_dir.name
+        asr_file = segment_dir / "asr_result.json"
+        translation_file = segment_dir / "translation_result.json"
+
+        # 检查 ASR 文件是否存在
+        if not asr_file.exists():
+            console.print(f"  [{i}/{total_count}] {segment_name} - ASR 文件不存在，跳过")
+            continue
+
+        # 检查是否已翻译
+        if translation_file.exists():
+            console.print(f"  [{i}/{total_count}] {segment_name} - 已翻译，跳过")
+            completed_count += 1
+            continue
+
+        console.print(f"  [{i}/{total_count}] {segment_name}")
+
+        # 加载 ASR 结果
+        with open(asr_file, encoding="utf-8") as f:
+            asr_result = json.load(f)
+
+        segments = segments_from_asr_result(asr_result)
+        if not segments:
+            console.print("    [yellow]⚠️  空文件，跳过[/yellow]")
+            continue
+
+        console.print(f"    [dim]段落数: {len(segments)}[/dim]")
+
+        # 提交批量任务
+        job = translator.submit(
+            segments=segments,
+            source_lang=source_lang,
+            target_lang=target_lang,
+            episode_id=f"{episode_id}_{segment_name}",
+        )
+        console.print(f"    [dim]batch_id: {job.batch_id}[/dim]")
+
+        # 等待完成
+        final_status = translator.wait_for_completion(batch_id=job.batch_id)
+
+        if not final_status.is_success:
+            console.print(f"    [red]❌ 失败: {final_status.status.value}[/red]")
+            continue
+
+        # 获取结果
+        translated_segments = translator.fetch_results(job, segments)
+
+        # 转换为标准格式并保存
+        result = results_to_translation_result(
+            translated_segments,
+            source_lang=source_lang,
+            target_lang=target_lang,
+            model=settings.zhipu_batch_model,
+        )
+
+        with open(translation_file, "w", encoding="utf-8") as f:
+            json.dump(result, f, ensure_ascii=False, indent=2)
+
+        console.print(f"    [green]✓[/green] 已保存: {translation_file.name}")
+        completed_count += 1
+
+    # 检查是否全部完成
+    if completed_count == total_count:
+        # 更新数据库
+        db.update_episode_status(
+            episode_id,
+            {
+                "translation_completed": True,
+                "translation_timestamp": datetime.now(),
+                "retry_count": 0,
+            },
+        )
+        console.print(
+            f"[green]✓[/green] 全部分片翻译完成 ({completed_count}/{total_count})"
+        )
+    else:
+        console.print(
+            f"[yellow]⚠️  部分分片完成 ({completed_count}/{total_count})[/yellow]"
+        )
+
+
+@zhipu_batch_app.command("status")
+def zhipu_batch_status(
+    batch_id: str = typer.Argument(
+        None,
+        help="批量任务 ID（不指定则显示所有任务）",
+    ),
+    refresh: bool = typer.Option(
+        False,
+        "--refresh",
+        "-r",
+        help="从 API 刷新状态",
+    ),
+) -> None:
+    """查看批量翻译任务状态。
+
+    示例:
+        # 查看所有本地任务
+        podtrans zhipu-batch-translate status
+
+        # 查看指定任务
+        podtrans zhipu-batch-translate status batch_xxx
+
+        # 刷新任务状态
+        podtrans zhipu-batch-translate status batch_xxx --refresh
+    """
+    from podtrans.translation.zhipu_batch import ZhipuBatchTranslator
+
+    console.print("\n[bold blue]📦 智谱批量翻译 - 任务状态[/bold blue]\n")
+
+    settings = get_settings()
+    translator = ZhipuBatchTranslator()
+
+    if batch_id:
+        # 查看指定任务
+        job = translator.load_job(batch_id)
+        if not job:
+            console.print(f"[bold red]❌ 未找到本地任务记录: {batch_id}[/bold red]")
+            console.print("[dim]该任务可能不是从本机提交的[/dim]")
+            raise typer.Exit(1)
+
+        if refresh and settings.zhipu_api_key:
+            try:
+                job = translator.refresh_job_status(job)
+                console.print("[dim]状态已刷新[/dim]\n")
+            except Exception as e:
+                console.print(f"[yellow]⚠️  刷新失败: {e}[/yellow]\n")
+
+        _print_job_detail(job, console)
+    else:
+        # 列出所有任务
+        jobs = translator.list_jobs()
+        if not jobs:
+            console.print("[dim]没有本地任务记录[/dim]")
+            console.print("[dim]使用 'podtrans zhipu-batch-translate submit' 提交任务[/dim]")
+            return
+
+        console.print(f"[bold]本地任务记录: {len(jobs)} 个[/bold]\n")
+
+        for job in jobs[:20]:
+            status_color = _get_status_color(job.status)
+            console.print(f"  [{status_color}]{job.status.value:12}[/{status_color}] {job.batch_id}")
+            console.print(f"                    [dim]segments: {job.segments_count}, episode: {job.episode_id or 'N/A'}[/dim]")
+            console.print(f"                    [dim]created: {job.created_at.strftime('%Y-%m-%d %H:%M')}[/dim]")
+            console.print()
+
+        if len(jobs) > 20:
+            console.print(f"[dim]... 还有 {len(jobs) - 20} 个任务[/dim]")
+
+
+def _get_status_color(status) -> str:
+    """获取状态对应的颜色。"""
+    from podtrans.translation.zhipu_batch.schemas import BatchJobStatus
+
+    color_map = {
+        BatchJobStatus.VALIDATING: "yellow",
+        BatchJobStatus.IN_PROGRESS: "cyan",
+        BatchJobStatus.FINALIZING: "cyan",
+        BatchJobStatus.COMPLETED: "green",
+        BatchJobStatus.FAILED: "red",
+        BatchJobStatus.EXPIRED: "red",
+        BatchJobStatus.CANCELLING: "yellow",
+        BatchJobStatus.CANCELLED: "dim",
+    }
+    return color_map.get(status, "white")
+
+
+def _print_job_detail(job, console) -> None:
+    """打印任务详情。"""
+    status_color = _get_status_color(job.status)
+
+    console.print(f"[bold]任务 ID:[/bold] {job.batch_id}")
+    console.print(f"[bold]状态:[/bold] [{status_color}]{job.status.value}[/{status_color}]")
+    console.print(f"[bold]模型:[/bold] {job.model}")
+    console.print(f"[bold]段落数:[/bold] {job.segments_count}")
+    console.print(f"[bold]语言:[/bold] {job.source_language} → {job.target_language}")
+    console.print(f"[bold]剧集:[/bold] {job.episode_id or 'N/A'}")
+    console.print()
+    console.print(f"[bold]进度:[/bold] {job.completed_count}/{job.segments_count} ({job.failed_count} 失败)")
+    console.print()
+    console.print(f"[bold]创建时间:[/bold] {job.created_at.strftime('%Y-%m-%d %H:%M:%S')}")
+    console.print(f"[bold]更新时间:[/bold] {job.updated_at.strftime('%Y-%m-%d %H:%M:%S')}")
+    if job.completed_at:
+        console.print(f"[bold]完成时间:[/bold] {job.completed_at.strftime('%Y-%m-%d %H:%M:%S')}")
+    console.print()
+    if job.input_file_path:
+        console.print(f"[bold]输入文件:[/bold] {job.input_file_path}")
+    if job.output_file_path:
+        console.print(f"[bold]输出文件:[/bold] {job.output_file_path}")
+
+
+@zhipu_batch_app.command("fetch")
+def zhipu_batch_fetch(
+    batch_id: str = typer.Argument(
+        None,
+        help="批量任务 ID（不指定则获取所有已完成任务）",
+    ),
+    output_dir: Path = typer.Option(
+        None,
+        "--output-dir",
+        "-o",
+        help="输出目录（默认保存到剧集目录）",
+    ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        "-f",
+        help="强制覆盖已存在的翻译结果",
+    ),
+) -> None:
+    """获取并解析批量翻译结果。
+
+    任务完成后，使用此命令下载结果并转换为标准翻译格式。
+
+    示例:
+        # 获取指定任务结果
+        podtrans zhipu-batch-translate fetch batch_xxx
+
+        # 获取所有已完成任务
+        podtrans zhipu-batch-translate fetch
+
+        # 强制覆盖
+        podtrans zhipu-batch-translate fetch batch_xxx --force
+    """
+    import json
+
+    from podtrans.translation.zhipu_batch import ZhipuBatchTranslator
+    from podtrans.translation.zhipu_batch.schemas import BatchJobStatus
+    from podtrans.translation.zhipu_batch.translator import (
+        results_to_translation_result,
+    )
+
+    console.print("\n[bold blue]📦 智谱批量翻译 - 获取结果[/bold blue]\n")
+
+    settings = get_settings()
+    if not settings.zhipu_api_key:
+        console.print("[bold red]❌ 未配置 ZHIPU_API_KEY[/bold red]")
+        raise typer.Exit(1)
+
+    translator = ZhipuBatchTranslator()
+
+    if batch_id:
+        # 获取指定任务
+        job = translator.load_job(batch_id)
+        if not job:
+            console.print(f"[bold red]❌ 未找到本地任务记录: {batch_id}[/bold red]")
+            raise typer.Exit(1)
+        jobs = [job]
+    else:
+        # 获取所有已完成任务
+        all_jobs = translator.list_jobs()
+        jobs = [j for j in all_jobs if j.status == BatchJobStatus.COMPLETED and not j.output_file_path]
+        if not jobs:
+            console.print("[green]✅ 没有待获取的已完成任务[/green]")
+            return
+
+    console.print(f"[bold]待处理任务: {len(jobs)} 个[/bold]\n")
+
+    success_count = 0
+    failed_count = 0
+
+    for job in jobs:
+        console.print(f"[cyan]处理任务:[/cyan] {job.batch_id}")
+
+        try:
+            # 刷新状态
+            job = translator.refresh_job_status(job)
+
+            if job.status != BatchJobStatus.COMPLETED:
+                console.print(f"  [yellow]⚠️  任务未完成: {job.status.value}[/yellow]")
+                continue
+
+            # 加载原始 ASR 结果以获取元数据
+            segments = None
+            if job.input_file_path and job.input_file_path.exists():
+                # 从请求文件反推 ASR 文件位置
+                # 请求文件: output/zhipu_batch/{episode_id}_{timestamp}_requests.jsonl
+                # ASR 文件: data/{podcast}/{episode}/asr_result.json
+                pass  # 暂时不需要原始段落信息
+
+            # 获取结果
+            translated_segments = translator.fetch_results(job, segments)
+
+            if not translated_segments:
+                console.print("  [yellow]⚠️  结果为空[/yellow]")
+                continue
+
+            # 转换为标准格式
+            result = results_to_translation_result(
+                translated_segments,
+                source_lang=job.source_language,
+                target_lang=job.target_language,
+                model=job.model,
+            )
+
+            # 确定输出路径
+            if output_dir:
+                out_path = output_dir / f"{job.batch_id}_translation.json"
+            elif job.episode_id:
+                # 尝试找到剧集目录
+                out_path = settings.output_dir / "zhipu_batch" / f"{job.batch_id}_translation.json"
+            else:
+                out_path = settings.output_dir / "zhipu_batch" / f"{job.batch_id}_translation.json"
+
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+
+            # 检查是否已存在
+            if out_path.exists() and not force:
+                console.print(f"  [yellow]⚠️  文件已存在: {out_path}[/yellow]")
+                console.print("  [dim]使用 --force 覆盖[/dim]")
+                continue
+
+            # 保存结果
+            with open(out_path, "w", encoding="utf-8") as f:
+                json.dump(result, f, ensure_ascii=False, indent=2)
+
+            console.print(f"  [green]✅ 已保存[/green]: {out_path}")
+            console.print(f"     [dim]segments: {len(translated_segments)}[/dim]")
+            success_count += 1
+
+        except Exception as e:
+            console.print(f"  [red]❌ 失败: {e}[/red]")
+            failed_count += 1
+            logger.exception(f"获取批量结果失败: {job.batch_id}")
+
+    # 汇总
+    console.print("\n" + "=" * 50)
+    console.print("[bold]获取汇总[/bold]")
+    console.print(f"  成功: [green]{success_count}[/green]")
+    console.print(f"  失败: [red]{failed_count}[/red]")
+    console.print("=" * 50 + "\n")
+
+
+@zhipu_batch_app.command("list")
+def zhipu_batch_list(
+    limit: int = typer.Option(
+        20,
+        "--limit",
+        "-l",
+        help="返回数量限制",
+    ),
+    remote: bool = typer.Option(
+        False,
+        "--remote",
+        "-r",
+        help="从 API 获取远程任务列表",
+    ),
+) -> None:
+    """列出批量翻译任务。
+
+    示例:
+        # 列出本地任务
+        podtrans zhipu-batch-translate list
+
+        # 从 API 获取远程任务
+        podtrans zhipu-batch-translate list --remote
+    """
+    from podtrans.translation.zhipu_batch import ZhipuBatchClient, ZhipuBatchTranslator
+    from podtrans.translation.zhipu_batch.schemas import BatchJobStatus
+
+    console.print("\n[bold blue]📦 智谱批量翻译 - 任务列表[/bold blue]\n")
+
+    settings = get_settings()
+
+    if remote:
+        if not settings.zhipu_api_key:
+            console.print("[bold red]❌ 未配置 ZHIPU_API_KEY[/bold red]")
+            raise typer.Exit(1)
+
+        client = ZhipuBatchClient()
+        try:
+            batches = client.list_batches(limit=limit)
+            console.print(f"[bold]远程任务: {len(batches)} 个[/bold]\n")
+
+            for batch in batches:
+                status = batch.get("status", "unknown")
+                batch_id = batch.get("id", "N/A")
+                created = batch.get("created_at", 0)
+
+                status_color = _get_status_color(BatchJobStatus(status) if status in [s.value for s in BatchJobStatus] else BatchJobStatus.IN_PROGRESS)
+                console.print(f"  [{status_color}]{status:12}[/{status_color}] {batch_id}")
+
+                # 请求计数
+                counts = batch.get("request_counts", {})
+                total = counts.get("total", 0)
+                completed = counts.get("completed", 0)
+                failed = counts.get("failed", 0)
+                console.print(f"                    [dim]requests: {completed}/{total} ({failed} failed)[/dim]")
+
+        except Exception as e:
+            console.print(f"[red]❌ 获取失败: {e}[/red]")
+            raise typer.Exit(1)
+        finally:
+            client.close()
+    else:
+        translator = ZhipuBatchTranslator()
+        jobs = translator.list_jobs()
+
+        if not jobs:
+            console.print("[dim]没有本地任务记录[/dim]")
+            return
+
+        console.print(f"[bold]本地任务: {len(jobs)} 个[/bold]\n")
+
+        for job in jobs[:limit]:
+            status_color = _get_status_color(job.status)
+            console.print(f"  [{status_color}]{job.status.value:12}[/{status_color}] {job.batch_id}")
+            console.print(f"                    [dim]segments: {job.segments_count}, created: {job.created_at.strftime('%m-%d %H:%M')}[/dim]")
+
+        if len(jobs) > limit:
+            console.print(f"\n[dim]... 还有 {len(jobs) - limit} 个任务[/dim]")
+
+
+@zhipu_batch_app.command("cancel")
+def zhipu_batch_cancel(
+    batch_id: str = typer.Argument(
+        ...,
+        help="要取消的批量任务 ID",
+    ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        "-f",
+        help="跳过确认直接取消",
+    ),
+) -> None:
+    """取消批量翻译任务。
+
+    示例:
+        podtrans zhipu-batch-translate cancel batch_xxx
+        podtrans zhipu-batch-translate cancel batch_xxx --force
+    """
+    from podtrans.translation.zhipu_batch import ZhipuBatchClient
+
+    console.print("\n[bold blue]📦 智谱批量翻译 - 取消任务[/bold blue]\n")
+
+    settings = get_settings()
+    if not settings.zhipu_api_key:
+        console.print("[bold red]❌ 未配置 ZHIPU_API_KEY[/bold red]")
+        raise typer.Exit(1)
+
+    if not force:
+        confirm = typer.confirm(f"确定要取消任务 {batch_id}？")
+        if not confirm:
+            console.print("[dim]已取消操作[/dim]")
+            return
+
+    client = ZhipuBatchClient()
+    try:
+        status = client.cancel_batch(batch_id)
+        console.print("[green]✅ 任务已取消[/green]")
+        console.print(f"[dim]状态: {status.status.value}[/dim]")
+    except Exception as e:
+        console.print(f"[red]❌ 取消失败: {e}[/red]")
+        raise typer.Exit(1)
+    finally:
+        client.close()
+
+
+@zhipu_batch_app.command("wait")
+def zhipu_batch_wait(
+    batch_id: str = typer.Argument(
+        ...,
+        help="批量任务 ID",
+    ),
+    poll_interval: int = typer.Option(
+        None,
+        "--interval",
+        "-i",
+        help="轮询间隔（秒），默认从配置读取",
+    ),
+    timeout: int = typer.Option(
+        None,
+        "--timeout",
+        "-t",
+        help="超时时间（秒），默认从配置读取",
+    ),
+    auto_fetch: bool = typer.Option(
+        True,
+        "--auto-fetch/--no-auto-fetch",
+        help="完成后自动获取结果",
+    ),
+) -> None:
+    """等待批量任务完成。
+
+    阻塞式等待，适合脚本自动化场景。
+
+    示例:
+        # 等待任务完成
+        podtrans zhipu-batch-translate wait batch_xxx
+
+        # 设置轮询间隔和超时
+        podtrans zhipu-batch-translate wait batch_xxx -i 30 -t 3600
+
+        # 完成后不自动获取结果
+        podtrans zhipu-batch-translate wait batch_xxx --no-auto-fetch
+    """
+    from podtrans.translation.zhipu_batch import ZhipuBatchTranslator
+
+    console.print("\n[bold blue]📦 智谱批量翻译 - 等待完成[/bold blue]\n")
+
+    settings = get_settings()
+    if not settings.zhipu_api_key:
+        console.print("[bold red]❌ 未配置 ZHIPU_API_KEY[/bold red]")
+        raise typer.Exit(1)
+
+    translator = ZhipuBatchTranslator()
+
+    # 加载本地任务记录
+    job = translator.load_job(batch_id)
+    if job:
+        console.print(f"[dim]任务: {batch_id}[/dim]")
+        console.print(f"[dim]段落数: {job.segments_count}[/dim]")
+        console.print(f"[dim]剧集: {job.episode_id or 'N/A'}[/dim]\n")
+
+    def status_callback(status):
+        """状态更新回调。"""
+        progress = f"{status.completed_requests}/{status.total_requests}"
+        console.print(f"  [dim]状态: {status.status.value}, 进度: {progress}[/dim]")
+
+    try:
+        console.print("[cyan]等待任务完成...[/cyan]")
+        console.print(f"[dim]轮询间隔: {poll_interval or settings.zhipu_batch_poll_interval}s[/dim]")
+        console.print(f"[dim]超时: {timeout or settings.zhipu_batch_timeout}s[/dim]\n")
+
+        final_status = translator.wait_for_completion(
+            batch_id=batch_id,
+            poll_interval=poll_interval,
+            timeout=timeout,
+            callback=status_callback,
+        )
+
+        if final_status.is_success:
+            console.print("\n[green]✅ 任务完成！[/green]")
+            console.print(f"[dim]完成: {final_status.completed_requests}, 失败: {final_status.failed_requests}[/dim]")
+
+            if auto_fetch and job:
+                console.print("\n[cyan]自动获取结果...[/cyan]")
+                # 调用 fetch 逻辑
+                zhipu_batch_fetch(batch_id=batch_id, output_dir=None, force=False)
+        else:
+            console.print(f"\n[red]❌ 任务失败: {final_status.status.value}[/red]")
+            raise typer.Exit(1)
+
+    except KeyboardInterrupt:
+        console.print("\n[yellow]已中断等待[/yellow]")
+        raise typer.Exit(130)
+    except Exception as e:
+        console.print(f"\n[red]❌ 错误: {e}[/red]")
+        raise typer.Exit(1)
+
+
 @app.callback()
 def main() -> None:
     """PodTrans - AI-powered podcast translation pipeline.

@@ -306,6 +306,35 @@ class Settings(BaseSettings):
         description="Maximum retries for API calls and downloads",
     )
 
+    # ===================================
+    # 智谱 Batch API 配置
+    # 用于大批量翻译任务，价格为标准 API 的 50%
+    # ===================================
+    zhipu_api_key: str = Field(
+        default="",
+        description="智谱 AI API 密钥（用于 Batch API 批量翻译）",
+    )
+    zhipu_batch_model: str = Field(
+        default="glm-4-plus",
+        description="智谱批量翻译使用的模型（推荐: glm-4-plus, glm-4-air-250414）",
+    )
+    zhipu_batch_poll_interval: int = Field(
+        default=60,
+        ge=10,
+        le=600,
+        description="批量任务状态轮询间隔（秒，默认: 60）",
+    )
+    zhipu_batch_timeout: int = Field(
+        default=86400,
+        ge=3600,
+        le=604800,
+        description="批量任务超时时间（秒，默认: 86400 = 24小时）",
+    )
+    zhipu_batch_auto_delete_input: bool = Field(
+        default=True,
+        description="批量任务完成后是否自动删除输入文件",
+    )
+
     @field_validator("output_dir", "log_dir", "cache_dir", "database_dir")
     @classmethod
     def create_dir_if_not_exists(cls, v: Path) -> Path:
